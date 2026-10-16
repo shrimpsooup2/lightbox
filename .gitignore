@@ -1,0 +1,22 @@
+# Build trees
+/build/
+/out/
+
+# Machine-specific CMake presets (Qt/MinGW paths)
+CMakeUserPresets.json
+
+# IDE / tooling
+.vs/
+.vscode/
+.idea/
+*.user
+.cache/
+compile_commands.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs and screenshots produced by local smoke runs
+*.log
+/shot*.png

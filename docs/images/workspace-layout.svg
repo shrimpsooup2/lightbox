@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+  <title>LightBox workspace layout (wireframe)</title>
+  <rect x="0" y="0" width="1200" height="720" rx="10" fill="#121317"/>
+
+  <!-- Menu bar -->
+  <text x="16" y="18" font-size="12" fill="#9AA0AB">File    View    Help</text>
+
+  <!-- Header bar with mode buttons -->
+  <rect x="0" y="26" width="1200" height="46" fill="#191B20" stroke="#2A2D34"/>
+  <rect x="14" y="38" width="22" height="22" rx="4" fill="#1FA7F0"/>
+  <text x="46" y="54" font-size="13" font-weight="600" fill="#E8EAEE">Untitled project</text>
+  <g font-size="13">
+    <text x="370" y="54" fill="#9AA0AB">Import</text>
+    <text x="456" y="54" fill="#9AA0AB">Build</text>
+    <rect x="522" y="35" width="98" height="28" rx="6" fill="#1FA7F0" fill-opacity="0.25"/>
+    <text x="536" y="54" font-weight="600" fill="#E8EAEE">Materials</text>
+    <text x="640" y="54" fill="#9AA0AB">Site</text>
+    <text x="700" y="54" fill="#9AA0AB">Light</text>
+    <text x="766" y="54" fill="#9AA0AB">Render</text>
+  </g>
+  <circle cx="1176" cy="49" r="9" fill="none" stroke="#9AA0AB" stroke-width="2"/>
+
+  <!-- Left: mode panel -->
+  <rect x="0" y="72" width="270" height="620" fill="#191B20" stroke="#2A2D34"/>
+  <text x="14" y="96" font-size="13" font-weight="600" fill="#E8EAEE">Materials</text>
+  <line x1="0" y1="108" x2="270" y2="108" stroke="#2A2D34"/>
+  <text x="14" y="130" font-size="11" fill="#9AA0AB">One sentence: what this panel is for.</text>
+  <text x="14" y="160" font-size="11" font-weight="600" fill="#9AA0AB">IN THIS PROJECT</text>
+  <g font-size="12" fill="#E8EAEE">
+    <rect x="14" y="174" width="28" height="16" rx="3" fill="#CCC8C0"/><text x="52" y="186">Clay</text><text x="190" y="186" fill="#9AA0AB">3 objects</text>
+    <rect x="14" y="200" width="28" height="16" rx="3" fill="#8C8C88"/><text x="52" y="212">Plinth</text><text x="190" y="212" fill="#9AA0AB">1 object</text>
+  </g>
+  <text x="14" y="262" font-size="11" font-weight="600" fill="#9AA0AB">SELECTED MATERIAL</text>
+  <rect x="14" y="276" width="242" height="28" rx="6" fill="#1FA7F0"/>
+  <text x="62" y="295" font-size="12" font-weight="600" fill="#FFFFFF">Apply to selected objects</text>
+  <text x="14" y="340" font-size="11" fill="#9AA0AB">Left panel = the current mode only.</text>
+  <text x="14" y="356" font-size="11" fill="#9AA0AB">No tabs, one title.</text>
+
+  <!-- Center: viewport toolbar + viewport -->
+  <rect x="274" y="72" width="602" height="36" fill="#191B20" stroke="#2A2D34"/>
+  <text x="288" y="95" font-size="12" fill="#9AA0AB">[frame]  [reset]  |  [grid]          viewport toolbar</text>
+  <rect x="274" y="108" width="602" height="584" fill="#8E949C"/>
+  <polygon points="430,520 640,600 820,500 610,430" fill="#B9BCC0"/>
+  <polygon points="520,380 640,420 640,540 520,500" fill="#E3E1DC"/>
+  <polygon points="640,420 740,380 740,500 640,540" fill="#7E8592"/>
+  <polygon points="520,380 620,340 740,380 640,420" fill="#ECEBE7"/>
+  <text x="290" y="132" font-size="12" fill="#1A1D24">Live viewport · always visible</text>
+
+  <!-- Right: Scene above Properties -->
+  <rect x="880" y="72" width="320" height="250" fill="#191B20" stroke="#2A2D34"/>
+  <text x="894" y="96" font-size="13" font-weight="600" fill="#E8EAEE">Scene</text>
+  <line x1="880" y1="108" x2="1200" y2="108" stroke="#2A2D34"/>
+  <g font-size="12" fill="#E8EAEE">
+    <text x="894" y="134">▾ Sample house</text>
+    <text x="912" y="156">Main volume</text>
+    <text x="912" y="178">Wing</text>
+    <text x="912" y="200">Stair tower</text>
+  </g>
+  <rect x="880" y="326" width="320" height="366" fill="#191B20" stroke="#2A2D34"/>
+  <text x="894" y="350" font-size="13" font-weight="600" fill="#E8EAEE">Properties</text>
+  <line x1="880" y1="362" x2="1200" y2="362" stroke="#2A2D34"/>
+  <text x="894" y="390" font-size="15" font-weight="600" fill="#E8EAEE">Main volume</text>
+  <text x="894" y="420" font-size="11" font-weight="600" fill="#9AA0AB">TRANSFORM</text>
+  <g fill="#22252B" stroke="#3A3F48">
+    <rect x="964" y="432" width="68" height="24" rx="4"/><rect x="1044" y="432" width="68" height="24" rx="4"/><rect x="1124" y="432" width="68" height="24" rx="4"/>
+  </g>
+  <text x="894" y="448" font-size="12" fill="#9AA0AB">Position</text>
+  <text x="894" y="500" font-size="11" fill="#9AA0AB">Right side = what is in the scene and</text>
+  <text x="894" y="516" font-size="11" fill="#9AA0AB">what you selected. Same in every mode.</text>
+
+  <!-- Status bar -->
+  <text x="16" y="711" font-size="11" fill="#9AA0AB">GPU · Vulkan · MSAA</text>
+  <text x="1060" y="711" font-size="11" fill="#9AA0AB">size · frame time</text>
+</svg>

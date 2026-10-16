@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>LightBox</title>
+  <defs>
+    <linearGradient id="lbShadow" gradientUnits="userSpaceOnUse" x1="365.23" y1="766.22" x2="658.77" y2="935.70"><stop offset="0" stop-color="#121738" stop-opacity="0.95"/><stop offset="1" stop-color="#121738" stop-opacity="0.78"/></linearGradient>
+    <linearGradient id="lbLeft" gradientUnits="userSpaceOnUse" x1="71.68" y1="257.78" x2="365.23" y2="766.22"><stop offset="0" stop-color="#A3E3FB"/><stop offset="1" stop-color="#6FCBF2"/></linearGradient>
+    <linearGradient id="lbTop" gradientUnits="userSpaceOnUse" x1="71.68" y1="257.78" x2="658.77" y2="257.78"><stop offset="0" stop-color="#2BB8F7"/><stop offset="1" stop-color="#0B93DE"/></linearGradient>
+    <linearGradient id="lbRight" gradientUnits="userSpaceOnUse" x1="658.77" y1="257.78" x2="365.23" y2="766.22"><stop offset="0" stop-color="#4A4CDB"/><stop offset="1" stop-color="#2F2FAE"/></linearGradient>
+  </defs>
+  <polygon points="365.23,766.22 658.77,596.74 952.32,766.22 658.77,935.70" fill="url(#lbShadow)"/>
+  <polygon points="71.68,257.78 365.23,427.26 365.23,766.22 71.68,596.74" fill="url(#lbLeft)"/>
+  <polygon points="365.23,88.30 658.77,257.78 365.23,427.26 71.68,257.78" fill="url(#lbTop)"/>
+  <polygon points="365.23,427.26 658.77,257.78 658.77,596.74 365.23,766.22" fill="url(#lbRight)"/>
+</svg>
