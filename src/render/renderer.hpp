@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 
 // Vulkan handle types only, for interop with the windowing layer (VK_NO_PROTOTYPES is defined).
@@ -16,6 +17,7 @@ class Presenter;
 
 struct RendererOptions {
     bool enableValidation = false; // needs VK_LAYER_KHRONOS_validation (Vulkan SDK)
+    std::filesystem::path pipelineCache; // compiled shaders kept between runs (empty: none)
 };
 
 // Owns the Vulkan instance, device and GPU resources shared by all viewports. Window-system agnostic:
@@ -37,15 +39,24 @@ public:
     void releaseMesh(MeshHandle handle);
 
     // Uploads an RGBA8 image with a full mip chain, usable both as sRGB (base color) and linear (data
-    // maps). Blocking. Throws std::invalid_argument for an empty or inconsistent image and
-    // std::runtime_error when the GPU texture limit (bindless capacity, ≤ 4096) is reached.
-    TextureHandle uploadTexture(const ImageData& image);
+    // maps). `color`: mainly used as a color map, so the mips are averaged in linear light (data
+    // maps such as normals must be averaged as stored). Blocking. Throws std::invalid_argument for
+    // an empty or inconsistent image and std::runtime_error when the GPU texture limit (bindless
+    // capacity, ≤ 4096) is reached.
+    TextureHandle uploadTexture(const ImageData& image, bool color);
+    // Uploads a sky image (RGBA16F with mips) into the same bindless table; release it with
+    // releaseTexture. Blocking. Same errors as uploadTexture.
+    TextureHandle uploadEnvironmentMap(const EnvironmentMap& map);
     // Same rules as releaseMesh (waits for the GPU; unknown handles are ignored).
     void releaseTexture(TextureHandle handle);
 
     // The presenter must be destroyed before the surface and before this renderer.
     std::unique_ptr<Presenter> createPresenter(VkSurfaceKHR surface, std::uint32_t width,
                                                std::uint32_t height);
+    // A presenter without a window: renders into an image of the given size that every render()
+    // can read back (the render screen's final images, at any resolution). No MSAA (the path
+    // tracer antialiases); resize() changes the output size.
+    std::unique_ptr<Presenter> createOffscreenPresenter(std::uint32_t width, std::uint32_t height);
 
     struct Impl;
 
@@ -70,6 +81,8 @@ public:
 
     std::uint32_t width() const;
     std::uint32_t height() const;
+    // Progress of the ray-traced view as of the last rendered frame.
+    RayTracingStatus rayTracingStatus() const;
 
 private:
     std::unique_ptr<Impl> impl_;

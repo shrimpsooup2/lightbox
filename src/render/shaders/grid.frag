@@ -48,5 +48,6 @@ void main() {
     }
     vec4 clip = f.viewProj * vec4(p, 1.0);
     gl_FragDepth = clip.z / clip.w;
-    outColor = vec4(color, alpha);
+    // The grid is a guide, not part of the scene: undo the exposure so it keeps its brightness.
+    outColor = vec4(color / max(f.look.x, 1e-4), alpha);
 }

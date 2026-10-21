@@ -17,6 +17,7 @@
 #include "core/mesh.hpp"
 #include "core/scene/environment.hpp"
 #include "core/scene/ids.hpp"
+#include "core/scene/light.hpp"
 #include "core/scene/look.hpp"
 #include "core/scene/material.hpp"
 #include "core/scene/transform.hpp"
@@ -38,6 +39,7 @@ struct Entity {
     std::vector<EntityId> children; // display order
     Transform transform;            // relative to the parent
     std::optional<MeshInstance> meshInstance;
+    std::optional<Light> light; // an artificial light at this entity (shines along its −Z)
 };
 
 struct MeshResource {
@@ -70,6 +72,7 @@ struct SceneChange {
         EntityReparented,
         TransformChanged,
         MeshInstanceChanged,
+        LightChanged,
         ResourceAdded,
         ResourceChanged,
         ResourceRemoved,
@@ -164,6 +167,7 @@ public:
     void setParent(EntityId id, EntityId parent);
     void setTransform(EntityId id, const Transform& transform);
     void setMeshInstance(EntityId id, std::optional<MeshInstance> instance);
+    void setLight(EntityId id, std::optional<Light> light);
 
     const Entity* entity(EntityId id) const;
     std::span<const EntityId> roots() const { return roots_; }
@@ -199,5 +203,18 @@ private:
     ListenerId nextListenerId_ = 1;
     std::mt19937_64 random_;
 };
+
+// Entities with a mesh among `ids` and everything inside them (groups, e.g. an imported model), each
+// once, in the given order and then hierarchy order. Unknown IDs are skipped.
+std::vector<EntityId> meshEntitiesIn(const Scene& scene, std::span<const EntityId> ids);
+// Gives every mesh entity in or inside `ids` the material; returns how many were changed.
+std::size_t applyMaterial(Scene& scene, std::span<const EntityId> ids, ResourceId material);
+// World-space bounds of the meshes in or inside `ids` (corners of each mesh's box, transformed);
+// nullopt when there are none.
+std::optional<Bounds> worldBoundsOf(const Scene& scene, std::span<const EntityId> ids);
+// Moves a (possibly parented) entity by a world-space offset.
+void moveBy(Scene& scene, EntityId id, const glm::vec3& worldOffset);
+// `ids` without the ones inside another listed entity, so moving each moves everything once.
+std::vector<EntityId> outermostEntities(const Scene& scene, std::span<const EntityId> ids);
 
 } // namespace lb

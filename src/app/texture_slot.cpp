@@ -225,9 +225,9 @@ std::unordered_map<ResourceId, int> textureUsage(const Scene& scene) {
     std::unordered_map<ResourceId, int> usage;
     scene.forEachMaterial([&](const MaterialResource& resource) {
         const Material& m = resource.material;
-        const std::array<ResourceId, 5> maps = {m.baseColorMap.texture, m.roughnessMap.texture,
+        const std::array<ResourceId, 6> maps = {m.baseColorMap.texture, m.roughnessMap.texture,
                                                 m.metalnessMap.texture, m.normalMap.texture,
-                                                m.occlusionMap.texture};
+                                                m.occlusionMap.texture, m.heightMap.texture};
         // A material using one texture for several maps (packed ORM) counts once, like
         // Scene::userCount.
         for (auto it = maps.begin(); it != maps.end(); ++it) {

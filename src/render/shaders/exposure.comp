@@ -1,0 +1,72 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#define LB_CUSTOM_PUSH
+#include "frame.glsl"
+
+// Auto exposure: the log-average luminance of the image (64 × 64 samples, center weighted), then
+// smoothed over time like an eye adapting. One workgroup; writes ExposureBuffer for the composite.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0) uniform sampler2D source;
+layout(set = 0, binding = 1) uniform sampler2D accumulated;
+
+layout(push_constant, std430) uniform PostPush {
+    vec4 params; // x: source scale, y: path tracer (1/0), z: frame time (s), w: auto exposure (1/0)
+    FrameBuffer frame;
+    ExposureBuffer exposure;
+} post;
+
+shared float gSums[256];
+shared float gWeights[256];
+
+vec3 sceneColor(ivec2 pixel) {
+    if (post.params.y > 0.5) {
+        vec4 sum = texelFetch(accumulated, pixel, 0);
+        if (sum.a > 0.0) {
+            return sum.rgb / sum.a;
+        }
+    }
+    return texelFetch(source, pixel, 0).rgb;
+}
+
+void main() {
+    ivec2 size = textureSize(source, 0);
+    uint index = gl_LocalInvocationIndex;
+    float sum = 0.0;
+    float weight = 0.0;
+    for (int j = 0; j < 4; ++j) {
+        for (int i = 0; i < 4; ++i) {
+            vec2 uv = (vec2(gl_LocalInvocationID.xy * 4u + uvec2(i, j)) + 0.5) / 64.0;
+            ivec2 pixel = clamp(ivec2(uv * vec2(size)), ivec2(0), size - 1);
+            vec3 color = sceneColor(pixel) * post.params.x;
+            float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+            if (isnan(luminance) || isinf(luminance)) {
+                continue;
+            }
+            float w = 1.0 - 0.6 * min(length(uv - 0.5) * 1.6, 1.0); // the center matters most
+            sum += log2(max(luminance, 1e-5)) * w;
+            weight += w;
+        }
+    }
+    gSums[index] = sum;
+    gWeights[index] = weight;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (index < stride) {
+            gSums[index] += gSums[index + stride];
+            gWeights[index] += gWeights[index + stride];
+        }
+        barrier();
+    }
+    if (index == 0u) {
+        float measured = clamp(gSums[0] / max(gWeights[0], 1e-6), -14.0, 8.0);
+        vec4 state = post.exposure.state;
+        if (state.y < 0.5) {
+            state.x = measured;
+        } else {
+            float rate = measured > state.x ? 2.5 : 1.5; // brightening adapts a little faster
+            state.x += (measured - state.x) * (1.0 - exp(-post.params.z * rate));
+        }
+        state.y = 1.0;
+        post.exposure.state = state;
+    }
+}

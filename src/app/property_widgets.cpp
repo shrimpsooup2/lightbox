@@ -5,11 +5,13 @@
 
 #include <QButtonGroup>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSlider>
 #include <QStyle>
 #include <QToolButton>
@@ -24,7 +26,6 @@ namespace {
 
 constexpr int kLabelWidth = 86;
 constexpr int kSliderSteps = 1000;
-
 } // namespace
 
 QVBoxLayout* scrollPage(QWidget* panel) {
@@ -32,13 +33,16 @@ QVBoxLayout* scrollPage(QWidget* panel) {
     auto* scroll = new QScrollArea(panel);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // Rows are built to fit the default panel width; if the user narrows the panel a lot, a
+    // scrollbar appears instead of clipping (and the panel never forces itself wider).
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     auto* page = new QWidget(scroll);
     page->setProperty("panel", true);
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(10, 8, 10, 12);
     layout->setSpacing(6);
     scroll->setWidget(page);
+    page->installEventFilter(scroll);
     auto* outer = new QVBoxLayout(panel);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->addWidget(scroll);
@@ -64,6 +68,9 @@ QDoubleSpinBox* valueField(double min, double max, int decimals, const QString& 
     field->setButtonSymbols(QAbstractSpinBox::NoButtons);
     field->setKeyboardTracking(false);
     field->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    // A spin box sizes itself for its longest possible text ("1000.000 m"); in a pair of fields
+    // that would widen the whole panel.
+    field->setMinimumWidth(56);
     return field;
 }
 

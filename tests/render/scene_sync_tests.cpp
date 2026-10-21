@@ -23,6 +23,7 @@ struct FakeGpu {
     std::vector<std::uint32_t> released;
     std::uint32_t nextTexture = 0;
     std::vector<std::uint32_t> texturesUploaded;
+    std::vector<bool> textureColor; // `color` flag of each upload
     std::vector<std::uint32_t> texturesReleased;
     bool failTextureUploads = false;
 
@@ -36,11 +37,12 @@ struct FakeGpu {
         return [this](render::MeshHandle handle) { released.push_back(handle.index); };
     }
     render::SceneSync::TextureUploader textureUploader() {
-        return [this](const ImageData&) {
+        return [this](const ImageData&, bool color) {
             if (failTextureUploads) {
                 throw std::runtime_error("texture limit reached");
             }
             texturesUploaded.push_back(nextTexture);
+            textureColor.push_back(color);
             return render::TextureHandle{nextTexture++};
         };
     }
@@ -129,6 +131,9 @@ TEST_CASE("materials map every parameter and texture slot") {
     material.textureScale = {2.0f, 3.0f};
     material.textureRotationDegrees = 45.0f;
     material.textureOffset = {0.25f, 0.5f};
+    material.variation = 0.4f;
+    material.heightMap = TextureSlot{packed, 0, false}; // shares the packed texture: no new upload
+    material.heightDepth = 0.03f;
     const ResourceId brick = scene.addMaterial("brick", material);
     const EntityId wall = scene.createEntity("wall");
     scene.setMeshInstance(wall, MeshInstance{cube, brick});
@@ -142,6 +147,10 @@ TEST_CASE("materials map every parameter and texture slot") {
     CHECK(p.roughness == 0.3f);
     CHECK(p.metalness == 0.7f);
     CHECK(gpu.texturesUploaded.size() == 2); // the packed map is uploaded once for both slots
+    // The color map's mips are filtered in linear light; data maps as stored.
+    REQUIRE(gpu.textureColor.size() == 2);
+    CHECK(gpu.textureColor[0]);
+    CHECK_FALSE(gpu.textureColor[1]);
     CHECK(p.baseColorMap.texture.valid());
     CHECK(p.roughnessMap.texture.index == p.metalnessMap.texture.index);
     CHECK(p.roughnessMap.texture.index != p.baseColorMap.texture.index);
@@ -157,6 +166,9 @@ TEST_CASE("materials map every parameter and texture slot") {
     CHECK(p.textureScale == glm::vec2(2.0f, 3.0f));
     CHECK(p.textureRotationDegrees == 45.0f);
     CHECK(p.textureOffset == glm::vec2(0.25f, 0.5f));
+    CHECK(p.variation == 0.4f);
+    CHECK(p.heightMap.texture.index == p.roughnessMap.texture.index);
+    CHECK(p.heightDepth == 0.03f);
 }
 
 TEST_CASE("a texture shared by two materials is uploaded once") {

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -9,6 +10,12 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
+
+#include "core/overlay.hpp"
+
+namespace lb {
+struct EnvironmentMap;
+}
 
 // Public, Vulkan-free types of the Live renderer API.
 namespace lb::render {
@@ -42,18 +49,48 @@ struct MaterialParams {
     MaterialTexture metalnessMap;
     MaterialTexture normalMap;
     MaterialTexture occlusionMap;
+    MaterialTexture heightMap; // parallax relief (red channel)
     float normalStrength = 1.0f;
     bool normalFlipY = false;
+    float heightDepth = 0.0f; // meters, white to black
     TextureMapping mapping = TextureMapping::UV;
     glm::vec2 textureScale{1.0f}; // UV: repeats per UV unit; Box: tile size in meters
     float textureRotationDegrees = 0.0f;
     glm::vec2 textureOffset{0.0f};
+    float variation = 0.0f; // 0…1 large-scale brightness/roughness variation (hides tiling)
+    bool randomTileRotation = false;
+    float transmission = 0.0f; // glass: 0 opaque … 1 clear; tinted by baseColor
+    float ior = 1.5f;
+    bool thinWalled = true;
+    glm::vec3 emission{0.0f}; // emitted radiance, render units
+};
+
+// Photometric quantities (lux, nits) to the renderer's linear units: the sun of intensity 1
+// (100 000 lux) lights a white surface to radiance 2.
+constexpr float kRenderUnitsPerLux = 6.2831853f / 100000.0f;
+
+enum class LightKind { Point, Spot, Area };
+
+// One artificial light in world space, intensities already in render units.
+struct LightParams {
+    std::uint64_t entity = 0; // the document entity carrying the light (picking, highlighting)
+    LightKind kind = LightKind::Point;
+    glm::vec3 position{0.0f};
+    glm::vec3 direction{0.0f, 0.0f, -1.0f}; // emission axis (spot, area)
+    glm::vec3 axisX{1.0f, 0.0f, 0.0f};      // area: width direction
+    glm::vec3 axisY{0.0f, 1.0f, 0.0f};      // area: height direction
+    glm::vec3 intensity{0.0f};  // point/spot: per steradian (candela × units); area: radiance
+    float radius = 0.05f;       // point/spot bulb radius, meters
+    glm::vec2 halfSize{0.3f};   // area: half width/height, meters
+    float cosOuter = 0.5f;      // spot: cosine of the outer half angle
+    float cosInner = 0.6f;      // spot: cosine where the edge fade starts
 };
 
 struct DrawItem {
     MeshHandle mesh;
     glm::mat4 transform{1.0f};
     std::uint32_t material = 0; // index into FrameInput::materials
+    bool transparent = false;   // glass: drawn after opaque surfaces, blended
 };
 
 struct Lighting {
@@ -62,9 +99,14 @@ struct Lighting {
     float skyIntensity = 1.0f;
     bool shadows = true;
     float shadowSoftness = 1.0f; // 0 … 4
+    // Sky image (null: procedural sky), its texture from Renderer::uploadEnvironmentMap, and how far
+    // it is turned (clockwise seen from above). The caller derives the sun from it.
+    std::shared_ptr<const EnvironmentMap> skyImage;
+    TextureHandle skyImageTexture;
+    float skyImageRotationDegrees = 0.0f;
 };
 
-enum class ToneMapping { Filmic, Neutral, None };
+enum class ToneMapping { Filmic, Neutral, None, AgX };
 
 struct LookSettings {
     float exposureEv = 0.0f;
@@ -74,6 +116,31 @@ struct LookSettings {
     float warmth = 0.0f; // -1 … +1
     float vignette = 0.15f;
     bool clay = false; // white model: ignore material colors
+    bool autoExposure = false; // exposureEv is then a compensation on top of the measured value
+};
+
+// Ray tracing (the quality renderer, D-027). Quality sets how far each pixel converges; speed sets
+// how much GPU time per frame it may use, so slow machines get the same image later instead of
+// freezing and fast ones finish sooner.
+enum class RayQuality { Draft, Good, Final, Ultra };
+enum class RaySpeed { Gentle, Balanced, Fast };
+
+struct RayTracingSettings {
+    bool enabled = false;
+    RayQuality quality = RayQuality::Good;
+    RaySpeed speed = RaySpeed::Balanced;
+    bool interacting = false; // camera or objects moving: show the raster view, restart afterwards
+};
+
+struct RayScene;
+
+struct RayTracingStatus {
+    bool supported = false; // the GPU can run the path tracer
+    bool active = false;    // enabled and showing (or preparing) a ray-traced image
+    bool preparing = false; // waiting for the scene's ray tracing data
+    std::uint32_t samples = 0;
+    std::uint32_t targetSamples = 0;
+    double seconds = 0.0;   // since the current image started
 };
 
 struct FrameInput {
@@ -86,6 +153,13 @@ struct FrameInput {
     Lighting lighting;
     LookSettings look;
     bool showGrid = true;
+    std::vector<OverlayLine> overlay; // gizmos, drawn last; widths in physical pixels
+    std::span<const LightParams> lights; // up to kMaxLights are used
+    RayTracingSettings rayTracing;
+    // Ray-traced geometry for the current scene (null while it is being prepared) and a counter
+    // that changes with anything that affects the image except the look (restarts accumulation).
+    std::shared_ptr<const RayScene> rayScene;
+    std::uint64_t sceneVersion = 0;
 };
 
 // A rendered frame read back to the CPU: tightly packed 8-bit sRGB pixels, top row first.
@@ -102,6 +176,7 @@ struct DeviceInfo {
     std::string driverVersion;
     bool discreteGpu = false;
     bool hardwareRayTracing = false; // VK_KHR_acceleration_structure + VK_KHR_ray_query available
+    bool pathTracing = false;        // compute path tracer supported (non-uniform texture indexing)
     std::uint64_t deviceLocalBytes = 0;
     std::uint32_t msaaSamples = 1;
 };

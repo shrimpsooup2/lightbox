@@ -1,5 +1,5 @@
 # LightBox executable: the Qt Widgets shell. The only target allowed to use Qt.
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Svg)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Svg Network)
 qt_standard_project_setup()
 
 set(LIGHTBOX_ICON_SIZES 16 24 32 48 64 128 256)
@@ -34,10 +34,14 @@ qt_add_executable(LightBox
     property_widgets.hpp
     render_panel.cpp
     render_panel.hpp
+    render_screen.cpp
+    render_screen.hpp
     scene_tree_model.cpp
     scene_tree_model.hpp
     start_screen.cpp
     start_screen.hpp
+    texture_browser.cpp
+    texture_browser.hpp
     texture_slot.cpp
     texture_slot.hpp
     theme.cpp
@@ -75,7 +79,8 @@ set_target_properties(LightBox PROPERTIES
     WIN32_EXECUTABLE $<NOT:$<CONFIG:Debug>>
     MACOSX_BUNDLE ON)
 
-target_link_libraries(LightBox PRIVATE lb_project lb_import lb_render lb_core Qt6::Widgets Qt6::Svg)
+target_link_libraries(LightBox PRIVATE lb_project lb_import lb_render lb_core
+    Qt6::Widgets Qt6::Svg Qt6::Network)
 lightbox_set_warnings(LightBox)
 
 if(WIN32 AND LIGHTBOX_DEPLOY_QT_ON_BUILD AND TARGET Qt6::windeployqt)

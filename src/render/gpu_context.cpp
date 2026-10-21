@@ -387,6 +387,12 @@ void GpuContext::pickPhysicalDevice() {
         bindlessTextureCapacity = textureCapacity;
         samplerAnisotropy = features.features.samplerAnisotropy == VK_TRUE;
         maxSamplerAnisotropy = props.limits.maxSamplerAnisotropy;
+        // The path tracer indexes textures per pixel (different materials in one dispatch).
+        nonUniformTextureIndexing = features12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+        info.pathTracing = nonUniformTextureIndexing;
+        timestamps =
+            props.limits.timestampComputeAndGraphics == VK_TRUE && graphics->timestampValidBits > 0;
+        timestampPeriodNs = props.limits.timestampPeriod;
     }
 
     if (physicalDevice == VK_NULL_HANDLE) {
@@ -421,6 +427,8 @@ void GpuContext::createDevice() {
     features12.descriptorBindingPartiallyBound = VK_TRUE;
     features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+    features12.shaderSampledImageArrayNonUniformIndexing =
+        nonUniformTextureIndexing ? VK_TRUE : VK_FALSE;
     VkPhysicalDeviceFeatures2 features{};
     features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     features.pNext = &features12;

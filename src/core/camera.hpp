@@ -27,6 +27,9 @@ public:
 
     // Rotate around the target. Positive yaw turns counter-clockwise seen from above.
     void orbit(float deltaYaw, float deltaPitch);
+    // Same turn, but around any world point (e.g. the point under the cursor): the eye and the
+    // view rotate together, so that point stays where it is on screen. The orbit target moves along.
+    void orbitAround(const glm::vec3& pivot, float deltaYaw, float deltaPitch);
     // Move the target in the view plane by a screen-space delta in pixels.
     void pan(float deltaXPixels, float deltaYPixels, float viewportHeightPixels);
     // Move toward (positive steps) or away from the target, exponentially.
@@ -45,6 +48,10 @@ public:
     bool twoPointPerspective() const { return twoPoint_; }
     // Stand at `eyeHeight` meters looking level, from about where the camera is now.
     void moveToEyeLevel(float eyeHeight = 1.6f);
+    // Walkthrough: turn the view around the eye (not the orbit target), and move the eye. Forward
+    // and right stay on the ground plane, so looking up or down never changes the walking height.
+    void look(float deltaYaw, float deltaPitch);
+    void walk(float forwardMeters, float rightMeters, float upMeters);
 
     CameraState state() const;
     // Restores a saved state; values are clamped to the valid ranges.

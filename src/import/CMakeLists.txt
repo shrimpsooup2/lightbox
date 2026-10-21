@@ -5,6 +5,7 @@ add_library(lb_import STATIC
     gltf_importer.cpp
     obj_importer.cpp
     fbx_importer.cpp
+    assimp_importer.cpp
     mesh_processing.cpp
     mesh_processing.hpp
     scene_builder.cpp
@@ -13,5 +14,5 @@ add_library(lb_import STATIC
 
 target_link_libraries(lb_import
     PUBLIC lb_core
-    PRIVATE lightbox_cgltf lightbox_tinyobjloader lightbox_ufbx)
+    PRIVATE lightbox_cgltf lightbox_tinyobjloader lightbox_ufbx assimp miniz)
 lightbox_set_warnings(lb_import)

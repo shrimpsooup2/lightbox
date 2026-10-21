@@ -90,24 +90,6 @@ struct CornerKeyHash {
     }
 };
 
-// OBJ stores no units. Architecture exports are usually meters, centimeters or millimeters; a
-// building or room in meters rarely exceeds 500 m, in centimeters 5000 units (50 m) — so the largest
-// extent picks the unit: > 5000 → millimeters, > 500 → centimeters, otherwise meters.
-struct UnitGuess {
-    double metersPerUnit;
-    std::string_view name;
-};
-
-UnitGuess guessUnits(float largestExtent) {
-    if (largestExtent > 5000.0f) {
-        return {0.001, "millimeters"};
-    }
-    if (largestExtent > 500.0f) {
-        return {0.01, "centimeters"};
-    }
-    return {1.0, "meters"};
-}
-
 class ObjReader {
 public:
     ObjReader(const std::filesystem::path& path, ImportedModel& model, const Job& job)
@@ -370,6 +352,7 @@ void ObjReader::guessModelUnits() {
     const UnitGuess guess = guessUnits(extent);
     model_.metersPerUnit = guess.metersPerUnit;
     model_.unitsFromFile = false;
+    model_.axesFromFile = false; // Y-up assumed above; addModel checks it against the geometry
     if (any) {
         model_.warnings.push_back(std::format(
             "OBJ files don't store units. LightBox assumed {} from the model size ({:.3g} m); "

@@ -99,6 +99,27 @@ target_include_directories(lightbox_tinyobjloader SYSTEM INTERFACE "${tinyobjloa
 add_library(lightbox_ufbx STATIC "${ufbx_SOURCE_DIR}/ufbx.c")
 target_include_directories(lightbox_ufbx SYSTEM PUBLIC "${ufbx_SOURCE_DIR}")
 
+# More model formats (D-025): Assimp (BSD-3; bundled zlib, pugixml, poly2tri are permissive), with only
+# the Collada (.dae/.kmz), 3DS, STL and PLY importers compiled in. Static, no exporters or tools.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
+set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INJECT_DEBUG_POSTFIX OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+foreach(format COLLADA 3DS STL PLY)
+    set(ASSIMP_BUILD_${format}_IMPORTER ON CACHE BOOL "" FORCE)
+endforeach()
+FetchContent_Declare(assimp
+    URL    https://github.com/assimp/assimp/archive/refs/tags/v5.4.3.tar.gz
+    SYSTEM)
+FetchContent_MakeAvailable(assimp)
+
 # Shader compiler: use glslang from the Vulkan SDK if installed, otherwise build it from source.
 find_program(LIGHTBOX_GLSLANG_EXECUTABLE NAMES glslang glslangValidator
     HINTS "$ENV{VULKAN_SDK}/bin" "$ENV{VULKAN_SDK}/Bin")

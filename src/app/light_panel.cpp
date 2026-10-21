@@ -12,7 +12,10 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QPushButton>
+#include <QSettings>
 #include <QSlider>
 #include <QTime>
 #include <QTimeEdit>
@@ -20,6 +23,7 @@
 
 #include "app/theme.hpp"
 #include "app/ui_helpers.hpp"
+#include "app/viewport_window.hpp"
 #include "core/solar.hpp"
 
 namespace lb::app {
@@ -128,7 +132,9 @@ QDoubleSpinBox* numberField(double min, double max, int decimals, const QString&
 
 } // namespace
 
-LightPanel::LightPanel(Scene& scene, QWidget* parent) : QWidget(parent), scene_(scene) {
+LightPanel::LightPanel(Scene& scene, Selection& selection, ViewportWindow& viewport,
+                       QWidget* parent)
+    : QWidget(parent), scene_(scene), selection_(selection), viewport_(viewport) {
     QVBoxLayout* layout = ui::scrollPage(this);
     QWidget* page = layout->parentWidget();
 
@@ -146,8 +152,89 @@ LightPanel::LightPanel(Scene& scene, QWidget* parent) : QWidget(parent), scene_(
     layout->addLayout(presetGrid);
     layout->addSpacing(4);
 
+    // Artificial lights.
+    auto* lights = new ui::Section(tr("Lights"), page);
+    auto* addRow = new QHBoxLayout;
+    addRow->setSpacing(6);
+    struct AddButton {
+        LightType type;
+        const char* icon;
+        const char* text;
+        const char* tip;
+    };
+    const AddButton addButtons[] = {
+        {LightType::Point, "lightbulb", "Bulb", "A bulb shining in every direction (pendants, lamps)"},
+        {LightType::Spot, "lamp-ceiling", "Spot", "A cone of light (downlights, spotlights)"},
+        {LightType::Area, "panel-top", "Panel", "A glowing rectangle (ceiling panels, light boxes)"},
+    };
+    for (const AddButton& entry : addButtons) {
+        auto* button =
+            new QPushButton(theme::icon(QString::fromLatin1(entry.icon)), tr(entry.text), lights);
+        button->setProperty("compact", true);
+        button->setToolTip(tr("Add: %1. It appears in the middle of the view; move it with the "
+                              "arrows.")
+                               .arg(tr(entry.tip)));
+        const LightType type = entry.type;
+        connect(button, &QPushButton::clicked, this, [this, type] { addLight(type); });
+        addRow->addWidget(button);
+    }
+    lights->addWide(addRow);
+    lightHint_ = ui::label(tr("Select a light in the viewport or the Scene panel to change it."),
+                           "muted", lights);
+    lightHint_->setWordWrap(true);
+    lights->addWide(lightHint_);
+    ui::Section* editor = lights;
+    lightType_ = new ui::SegmentedControl({tr("Bulb"), tr("Spot"), tr("Panel")}, editor);
+    lightTypeRow_ = editor->addWide(lightType_);
+    lumens_ = new ui::SliderField(0.0, 20000.0, 0, tr(" lm"), editor);
+    lumensRow_ = editor->addRow(tr("Brightness"), lumens_);
+    lumensRow_.label->setToolTip(tr("Light output in lumens, as printed on the box: a 60 W bulb gives "
+                              "about 800 lm, a downlight 500–1000 lm, a ceiling panel 3000–4000 lm."));
+    lightTemperature_ = new ui::SliderField(1800.0, 8000.0, 0, tr(" K"), editor);
+    temperatureRow_ = editor->addRow(tr("Color"), lightTemperature_);
+    temperatureRow_.label->setToolTip(tr("Color temperature: 2700 K warm white (homes), 4000 K neutral "
+                              "(offices), 6500 K daylight."));
+    radius_ = new ui::SliderField(0.01, 0.5, 2, tr(" m"), editor);
+    radiusRow_ = editor->addRow(tr("Bulb size"), radius_);
+    radiusRow_.label->setToolTip(tr("Bigger bulbs give softer shadows."));
+    width_ = new ui::SliderField(0.05, 5.0, 2, tr(" m"), editor);
+    widthRow_ = editor->addRow(tr("Width"), width_);
+    height_ = new ui::SliderField(0.05, 5.0, 2, tr(" m"), editor);
+    heightRow_ = editor->addRow(tr("Length"), height_);
+    spotAngle_ = new ui::SliderField(5.0, 170.0, 0, QStringLiteral("°"), editor);
+    angleRow_ = editor->addRow(tr("Beam"), spotAngle_);
+    angleRow_.label->setToolTip(tr("How wide the cone of light is."));
+    spotSoftness_ = new ui::SliderField(0.0, 1.0, 2, QString(), editor);
+    softnessRow_ = editor->addRow(tr("Edge"), spotSoftness_);
+    softnessRow_.label->setToolTip(tr("0 = a crisp edge, 1 = fading out across the whole beam."));
+    layout->addWidget(lights);
+
+    // Sky image (HDRI).
+    auto* skySection = new ui::Section(tr("Sky"), page);
+    auto* imageLayout = new QHBoxLayout;
+    imageLayout->setSpacing(6);
+    skyImageButton_ = new QPushButton(skySection);
+    skyImageButton_->setToolTip(
+        tr("Use a photographed sky (an .hdr panorama, e.g. from polyhaven.com) for the background, "
+           "the reflections and the light. Its sun is found and lights the model with sharp "
+           "shadows. You can also drop an .hdr file on the viewport."));
+    imageLayout->addWidget(skyImageButton_, 1);
+    skyClearButton_ = new QPushButton(tr("Clear"), skySection);
+    skyClearButton_->setToolTip(tr("Back to the automatic sky driven by the sun."));
+    imageLayout->addWidget(skyClearButton_);
+    skySection->addRow(tr("Sky image"), imageLayout);
+    skyRotation_ = new ui::SliderField(0.0, 360.0, 0, QStringLiteral("°"), skySection);
+    skyRotationRow_ = skySection->addRow(tr("Turn"), skyRotation_);
+    skyRotationRow_.label->setToolTip(
+        tr("Turns the sky image around the model, and its sun with it: use it to aim the light."));
+    layout->addWidget(skySection);
+
     // Sun.
     auto* sun = new ui::Section(tr("Sun"), page);
+    sunFollowsSky_ = ui::label(tr("The sun comes from the sky image: turn the sky to move it."),
+                               "muted", sun);
+    sunFollowsSky_->setWordWrap(true);
+    sun->addWide(sunFollowsSky_);
     mode_ = new ui::SegmentedControl({tr("Manual"), tr("Location && time")}, sun);
     sun->addWide(mode_);
     azimuth_ = new ui::SliderField(0.0, 360.0, 0, QStringLiteral("°"), sun);
@@ -309,6 +396,23 @@ LightPanel::LightPanel(Scene& scene, QWidget* parent) : QWidget(parent), scene_(
         e.sun.temperatureKelvin = static_cast<float>(v);
     });
     connectSlider(skyLight_, [](Environment& e, double v) { e.sky.intensity = static_cast<float>(v); });
+    connectSlider(skyRotation_, [](Environment& e, double v) {
+        e.sky.imageRotationDegrees = static_cast<float>(v);
+    });
+    connect(skyImageButton_, &QPushButton::clicked, this, [this] {
+        QSettings settings;
+        const QString path = QFileDialog::getOpenFileName(
+            this, tr("Choose a Sky Image"), settings.value(QStringLiteral("sky/lastDirectory")).toString(),
+            tr("Sky panoramas (*.hdr)"));
+        if (path.isEmpty()) {
+            return;
+        }
+        settings.setValue(QStringLiteral("sky/lastDirectory"), QFileInfo(path).absolutePath());
+        const std::string image = QFileInfo(path).absoluteFilePath().toStdString();
+        edit([&image](Environment& e) { e.sky.image = image; });
+    });
+    connect(skyClearButton_, &QPushButton::clicked, this,
+            [this] { edit([](Environment& e) { e.sky.image.clear(); }); });
     connectSlider(softness_, [](Environment& e, double v) {
         e.shadows.softness = static_cast<float>(v);
     });
@@ -318,16 +422,116 @@ LightPanel::LightPanel(Scene& scene, QWidget* parent) : QWidget(parent), scene_(
         }
     });
 
+    connect(lightType_, &ui::SegmentedControl::currentEdited, this, [this](int index) {
+        editLight([index](Light& l) { l.type = static_cast<LightType>(index); });
+    });
+    const auto connectLight = [this](ui::SliderField* field, auto apply) {
+        connect(field, &ui::SliderField::valueEdited, this, [this, apply](double value) {
+            editLight([&](Light& l) { apply(l, static_cast<float>(value)); });
+        });
+    };
+    connectLight(lumens_, [](Light& l, float v) { l.lumens = v; });
+    connectLight(lightTemperature_, [](Light& l, float v) { l.temperatureKelvin = v; });
+    connectLight(radius_, [](Light& l, float v) { l.radius = v; });
+    connectLight(width_, [](Light& l, float v) { l.areaSize.x = v; });
+    connectLight(height_, [](Light& l, float v) { l.areaSize.y = v; });
+    connectLight(spotAngle_, [](Light& l, float v) { l.spotAngleDegrees = v; });
+    connectLight(spotSoftness_, [](Light& l, float v) { l.spotSoftness = v; });
+
     listener_ = scene_.addListener([this](const SceneChange& change) {
         if (change.kind == SceneChange::Kind::EnvironmentChanged) {
             refresh();
         }
+        if (change.kind == SceneChange::Kind::LightChanged && change.entity == selectedLight()) {
+            refreshLight();
+        }
     });
+    selectionListener_ = selection_.addListener([this] { refreshLight(); });
     refresh();
+    refreshLight();
+}
+
+EntityId LightPanel::selectedLight() const {
+    const Entity* entity = scene_.entity(selection_.primary());
+    return entity && entity->light ? entity->id : EntityId{};
+}
+
+void LightPanel::addLight(LightType type) {
+    Light light;
+    light.type = type;
+    const char* name = "Light";
+    switch (type) {
+    case LightType::Point:
+        light.lumens = 800.0f;
+        name = "Bulb";
+        break;
+    case LightType::Spot:
+        light.lumens = 700.0f;
+        light.spotAngleDegrees = 50.0f;
+        name = "Spot";
+        break;
+    case LightType::Area:
+        light.lumens = 3500.0f;
+        light.areaSize = {0.6f, 0.6f};
+        name = "Panel";
+        break;
+    }
+    // In the middle of the view, where the user is looking; the gizmo moves it from there.
+    Transform transform;
+    transform.position = viewport_.camera().target();
+    const EntityId id = scene_.createEntity(tr(name).toStdString(), {}, transform);
+    scene_.setLight(id, light);
+    selection_.select(id);
+}
+
+void LightPanel::editLight(const std::function<void(Light&)>& change) {
+    if (updating_) {
+        return;
+    }
+    const EntityId id = selectedLight();
+    if (!id) {
+        return;
+    }
+    Light light = *scene_.entity(id)->light;
+    change(light);
+    scene_.setLight(id, light);
+}
+
+void LightPanel::refreshLight() {
+    const EntityId id = selectedLight();
+    lightHint_->setVisible(!id);
+    lightTypeRow_->setVisible(static_cast<bool>(id));
+    lumensRow_.setVisible(static_cast<bool>(id));
+    temperatureRow_.setVisible(static_cast<bool>(id));
+    if (!id) {
+        for (const ui::PropertyRow& row : {radiusRow_, widthRow_, heightRow_, angleRow_, softnessRow_}) {
+            row.setVisible(false);
+        }
+        return;
+    }
+    const Light& light = *scene_.entity(id)->light;
+    updating_ = true;
+    lightType_->setCurrent(static_cast<int>(light.type));
+    lumens_->setValue(light.lumens);
+    lightTemperature_->setValue(light.temperatureKelvin);
+    radius_->setValue(light.radius);
+    width_->setValue(light.areaSize.x);
+    height_->setValue(light.areaSize.y);
+    spotAngle_->setValue(light.spotAngleDegrees);
+    spotSoftness_->setValue(light.spotSoftness);
+    const bool area = light.type == LightType::Area;
+    const bool spot = light.type == LightType::Spot;
+    radiusRow_.setVisible(!area);
+    widthRow_.setVisible(area);
+    heightRow_.setVisible(area);
+    angleRow_.setVisible(spot);
+    softnessRow_.setVisible(spot);
+    updating_ = false;
 }
 
 LightPanel::~LightPanel() {
     scene_.removeListener(listener_);
+    selection_.removeListener(selectionListener_);
 }
 
 void LightPanel::edit(const std::function<void(Environment&)>& change) {
@@ -370,12 +574,23 @@ void LightPanel::refresh() {
     const bool location = sun.mode == SunMode::Location;
     updating_ = true;
 
+    const bool skyImage = !env.sky.image.empty();
+    skyImageButton_->setText(
+        skyImage ? QFileInfo(QString::fromStdString(env.sky.image)).fileName() : tr("Choose…"));
+    skyClearButton_->setVisible(skyImage);
+    skyRotationRow_.setVisible(skyImage);
+    skyRotation_->setValue(env.sky.imageRotationDegrees);
+    sunFollowsSky_->setVisible(skyImage);
+
+    mode_->setVisible(!skyImage);
     mode_->setCurrent(location ? kLocation : kManual);
-    azimuthRow_.setVisible(!location);
-    elevationRow_.setVisible(!location);
-    dateRow_.setVisible(location);
-    timeRow_.setVisible(location);
-    location_->setVisible(location);
+    azimuthRow_.setVisible(!location && !skyImage);
+    elevationRow_.setVisible(!location && !skyImage);
+    dateRow_.setVisible(location && !skyImage);
+    timeRow_.setVisible(location && !skyImage);
+    location_->setVisible(location && !skyImage);
+    readout_->setVisible(!skyImage);
+    temperature_->setEnabled(!skyImage); // the image's sun has its own color
 
     azimuth_->setValue(sun.azimuthDegrees);
     elevation_->setValue(sun.elevationDegrees);

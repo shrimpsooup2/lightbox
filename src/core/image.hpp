@@ -19,11 +19,23 @@ struct ImageData {
     bool operator==(const ImageData&) const = default;
 };
 
+// Decoded linear-light image: RGB floats, rows top to bottom (width * 3 floats per row).
+struct FloatImage {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::vector<float> pixels;
+
+    bool empty() const { return width == 0 || height == 0; }
+};
+
 // Decodes PNG, JPEG, TGA, BMP, PSD (composited), GIF (first frame) and Radiance HDR (tone-mapped to
 // 8 bits) into RGBA8. 16-bit images are reduced to 8 bits. Thread-safe.
 // Throws std::runtime_error with a user-presentable message (naming `nameForErrors`) on failure.
 ImageData decodeImage(std::span<const std::uint8_t> encoded, std::string_view nameForErrors);
 ImageData loadImage(const std::filesystem::path& path);
+// Radiance HDR keeps its full range; 8-bit formats are converted from sRGB to linear. Thread-safe;
+// throws std::runtime_error with a user-presentable message on failure.
+FloatImage loadFloatImage(const std::filesystem::path& path);
 
 // File extensions decodeImage() understands, lower case with the dot (".png", ".jpg", …).
 std::span<const std::string_view> imageFileExtensions();

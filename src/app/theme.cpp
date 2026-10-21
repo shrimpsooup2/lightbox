@@ -171,6 +171,7 @@ QPalette makeQPalette(const Palette& p) {
 //   hovers), QToolButton[role=textureThumb], QListView[role=textureGrid], QLabel[role=
 //   texturePreview]. Start screen: QWidget[role=startSidebar], QPushButton[role=startAction],
 //   QLabel[role=display] (large page title), QListView[role=projectGrid] (cards paint themselves).
+//   Render screen: QWidget[role=renderSidebar].
 constexpr const char* kStyleTemplate = R"QSS(
 QMainWindow, QDialog { background: {window}; }
 QMainWindow::separator { background: {window}; width: 3px; height: 3px; }
@@ -303,6 +304,7 @@ QListView[role="textureGrid"]::item { padding: 4px 2px; }
 QLabel[role="texturePreview"] { background: {window}; border: 1px solid {border}; border-radius: {radius}px; padding: 8px; }
 
 QWidget[role="startSidebar"] { background: {panel}; border-right: 1px solid {border}; }
+QWidget[role="renderSidebar"] { background: {panel}; border-left: 1px solid {border}; }
 QPushButton[role="startAction"] { padding: 9px 14px; font-size: 13px; text-align: left; }
 QLabel[role="display"] { font-size: 22px; font-weight: 600; }
 QListView[role="projectGrid"] { background: transparent; }

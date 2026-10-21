@@ -257,3 +257,194 @@ entry with a new one that references it (`Supersedes D-00X`).
     large with many 4K textures. Keeping the source bytes, or linking to them, comes with format v1 (2.10).
   - Saving runs on the UI thread for now.
   - Autosave, crash recovery and templates stay in 2.10.
+
+### D-023 · 2026-10-20 · Accepted · Online texture library (ambientCG + Poly Haven), packs as zips/folders
+
+- **Context:** The owner's top priority is making textures from texture websites quick to use. The
+  owner also named Poliigon.
+- **Decision:**
+  - **Texture library dialog** (Materials ▸ Texture library…) searches **ambientCG** and **Poly Haven**
+    through their public APIs. Both are CC0 and need no account or key.
+  - One click downloads a set at 1K/2K/4K into `%LOCALAPPDATA%/LightBox/Library/Textures/<source>/`
+    (an ambientCG zip, or a Poly Haven folder) with a small `<id>.json` record (name, source, URL,
+    license, real size). It then becomes a material at the source's real-world size (ambientCG cm,
+    Poly Haven mm; default 2 m when unknown) and is applied to the selection.
+  - Downloads already made are reused offline. Uses **Qt Network** (part of Qt, LGPL, dynamic) with a
+    disk cache for thumbnails and API responses.
+  - Poly Haven's API terms: free including commercial use, the source must be named in the UI (the
+    source switch and a credit line do this), and a unique User-Agent is required
+    (`LightBox/<version>`).
+  - **Poliigon** has no public download API: downloads need an account and the license is royalty-free
+    rather than CC0. So it is supported by dropping its downloads instead.
+  - Texture-set import accepts **zip archives and folders** as well as images, read with miniz (no
+    unpacking). The classifier understands Poliigon's two naming schemes, including the trailing
+    `_METALNESS`/`_SPECULAR` workflow marker, `NRM16`, `REFL`, `GLOSS` and `BaseColorOpacity`.
+- **Consequences:**
+  - LightBox stays fully usable offline. The library only needs the network for searching and for new
+    downloads (AGENTS.md principle 9).
+  - Asset library 1.10 can index the downloaded folder and its JSON records.
+  - API changes on either site may need updates; both are called from `texture_browser.cpp` only.
+
+### D-024 · 2026-10-21 · Accepted · CPU raycast for picking and walking, before the 0.7 GPU ID buffer
+
+- **Context:** The owner asked to pick individual objects in Materials and for a simple walkthrough
+  ("select the mode then click anywhere to start walking there"). The roadmap planned GPU picking via an ID
+  buffer in 0.7.
+- **Decision:**
+  - `core/raycast.*`: brute-force ray–triangle test (Möller–Trumbore) against every mesh (object-space test
+    after a bounds check), nearest hit with entity, point, normal (facing the ray) and distance. No acceleration structure.
+  - The viewport builds the mouse ray from the inverse view-projection (reverse-Z: depth 1 is near).
+  - A click without dragging selects the object under the cursor; Materials and Properties follow the
+    selection. The **Walk** toolbar toggle turns clicks into "stand here": eye 1.6 m above a floor hit, or
+    1.5 m in front of a wall on the floor below, facing it. W A S D / arrows, drag-to-look, Shift, Q/E, Esc.
+    Moving casts rays at eye and waist height and removes the part of the move into the hit surface, so
+    the walker slides along walls; no gravity or steps.
+- **Consequences:**
+  - Cost grows with triangle count (per click, and up to two rays × two passes per walk frame). Fine for
+    house-sized models; a BVH (or the 0.7 ID buffer for clicks) replaces it when large sites make it slow.
+  - The 0.7 selection outline and double-click → Properties remain open.
+
+### D-025 · 2026-10-21 · Accepted · More model formats through Assimp (Collada, KMZ, 3DS, STL, PLY)
+
+- **Context:** The owner asked for more standard house file formats. SketchUp's free version exports
+  Collada (`.dae`); 3D Warehouse and Google Earth hand out Collada or KMZ; older libraries are 3DS; CAD
+  and scans give STL/PLY. Roadmap 1.4 allowed Assimp or focused readers.
+- **Decision:**
+  - **Assimp 5.4.3** (BSD-3; its bundled zlib, pugixml, poly2tri and utf8cpp are permissive), static,
+    built with only the Collada, 3DS, STL and PLY importers, no exporters, tools or tests
+    (`cmake/LightBoxDependencies.cmake`, `src/import/assimp_importer.cpp`). One reader covers all five.
+  - **KMZ** is unzipped with miniz (already a dependency) into a temporary folder; the Collada model in
+    it is imported and the folder deleted (textures are in memory by then). Entries escaping the
+    folder are skipped.
+  - Axes: Assimp turns Collada (by `<up_axis>`) and 3DS into Y-up on the root node; LightBox adds its
+    usual Y-up → Z-up turn there. STL and PLY carry no axis information: taken as Z-up and flagged
+    (`ImportedModel::axesFromFile = false`) for the upright check of D-026. Units: Collada's `<unit>` is
+    applied by Assimp; the others are guessed from the size like OBJ (`guessUnits`, now shared).
+  - glTF, OBJ and FBX keep their dedicated readers (cgltf, tinyobjloader, ufbx): smaller, faster and
+    already tested.
+- **Consequences:**
+  - A one-off longer first build (Assimp's common code); adding another Assimp importer later is one
+    CMake line plus a dispatch entry.
+  - **IFC stays open (1.6):** Assimp's IFC reader handles only IFC2x3 and its generated schema is very
+    slow to build; IfcOpenShell or web-ifc remain the candidates. `.skp` stays an optional plugin (1.5).
+  - Collada's units are baked into the model's root node, so the Import panel reports them as meters.
+
+### D-026 · 2026-10-21 · Accepted · Orbit modes, gizmo overlay lines, import placement and upright guess
+
+- **Context:** Owner backlog: "different rotate types", "easier move/rotation with gizmos", "better
+  placement and auto-orientation when a model is imported". The renderer had no overlay pass; there is no
+  command system yet (0.7).
+- **Decision:**
+  - **Orbit modes** (viewport toolbar and View menu, saved in settings): around the model (orbit target),
+    around the cursor (pivot = surface or ground point under the cursor at drag start;
+    `OrbitCamera::orbitAround` rotates eye and view rigidly so the pivot stays put on screen), and look
+    around (turn in place).
+  - **Overlay lines:** `FrameInput::overlay` carries `lb::OverlayLine`s (world ends, pixel widths that may
+    taper, color). One pipeline (`overlay.vert/.frag`) draws each as a screen-space quad from a per-frame
+    storage buffer (the push constants' second address points at it in that pass), alpha-blended, no
+    depth test, after the grid. Saved images (`grabFrame`) leave overlays out.
+  - **Gizmo** (`core/gizmo.*`, Qt-free and unit-tested): X/Y/Z arrows, a square for sliding on the
+    ground, X/Y/Z rings, X/Y/Z scale squares past the rings and a white even-scale square in the middle
+    (axis scaling follows the handle; even scaling doubles per gizmo length dragged right, halves left;
+    a turned object stretches along its own axis closest to the dragged one); constant ~110 px on screen; at the bottom center of the selection. Picking is in
+    screen space; drags keep the start transforms and apply the total change (no drift), to the outermost
+    selected entities (a group and its child move once), through parent transforms. Shift snaps
+    0.1 m / 15° / 10 %. Shown in Import and Build modes only (Materials clicks shouldn't move walls).
+  - **Placement** (`core/placement.*`): every import is set on the ground (lowest point at z = 0),
+    footprint centered on the drop point in the viewport; without one, beside the existing content
+    (1 m apart along +X), or at the origin in an empty scene.
+  - **Upright guess** for files without axis information (OBJ, STL, PLY): compare the flat area facing
+    along each axis at the low end with that at the high end. Buildings and most objects have a broad
+    flat base and a sloped or smaller top; lying on a side, both ends look alike. Only clear evidence
+    turns the model (best score ≥ 2 % of all area and ≥ 2× the current up's score); ambiguous models
+    (plain boxes, trees) stay as read.
+- **Consequences:**
+  - Gizmo edits are not undoable until 0.7 (Properties edits aren't either).
+  - Separate imports that share CAD coordinates (site + building) no longer line up automatically: each
+    is centered. Moving them with the gizmo or a future "keep file position" option covers that.
+  - The upright guess can't help symmetric shapes; the Import panel's Up axis switch and the gizmo
+    rings remain the manual fix.
+
+### D-027 · 2026-10-21 · Accepted · Ray tracing is the quality renderer, on every GPU, with an adaptive time budget
+
+- **Context:** The owner: "the renderer should also focus heavily on raytracing … build in glass too.
+  Rather than freezing up on lower end machines, the renderer should still produce same quality if
+  wanted, but take adaptably longer to not stress the machine. On higher end machines, the quality should
+  be able to be improved or the render can be sped up." The development laptop (Iris Xe) has no hardware
+  ray tracing; Cycles (3.10) needs MSVC, which isn't available here.
+- **Decision:**
+  - LightBox gets its **own progressive path tracer** in Vulkan compute (3.8a). It needs nothing beyond
+    the Vulkan 1.3 baseline: triangles and a CPU-built BVH (binned SAH, built off the UI thread) in
+    storage buffers via buffer device address; materials and textures through the existing per-frame
+    material buffer and bindless table. Hardware ray tracing (`VK_KHR_ray_query`, acceleration
+    structures) becomes a faster traversal backend where present (3.8b); the software BVH stays the
+    reference and the fallback.
+  - **Quality and speed are separate.** Quality = target samples per pixel and bounce depth (Draft /
+    Good / Final). Speed = how much GPU time each frame may use (Gentle / Balanced / Fast). Every frame
+    the renderer measures its GPU time with timestamp queries and sizes the next batch to the budget,
+    split into tiles so no submission runs long (UI stays responsive, no driver timeouts, the laptop
+    isn't pinned). Slow GPUs reach the same image later; fast GPUs finish sooner or are given higher
+    targets. When the target is reached the GPU idles.
+  - The **raster engine stays** for interaction (dragging, walking, editing). Any scene or camera change
+    restarts accumulation. Both write the same linear HDR image; one composite pass applies the look
+    (3.2a), so ray-traced and raster images match in exposure and tone.
+  - **Glass** is part of the material model (transmission, IOR, thin-walled panes): refraction and
+    Fresnel in the path tracer, a transparent approximation in the raster view.
+  - Cycles (3.10) remains optional for MSVC builds; it is no longer the only route to photoreal images.
+- **Consequences:**
+  - A one-level BVH over world-space triangles is rebuilt after scene changes (fine for houses; a
+    two-level BVH for heavy instancing, e.g. forests, comes with 3.8b/5.5).
+  - Without denoising (3.8c) previews are noisy until enough samples accumulate.
+  - Hardware ray tracing code can't be tested on the development machine; it must keep the software
+    path's output and be verified on RT hardware before it is enabled by default.
+  - Implementation notes (2026-10-21): the BVH is relaid out depth first with miss links, so traversal
+    needs no stack (lower register pressure); the path tracer pipeline compiles on a worker thread and all
+    pipelines persist in `pipeline-cache.bin` (the first compile took ~28 s on Iris Xe and blocked
+    startup); the bindless texture set is visible to compute. Measured on Iris Xe: ~1 M pixel-samples/s
+    with sun, sky and light sampling, i.e. 7½ min for 256 samples at 1259×770.
+
+### D-028 · 2026-10-21 · Accepted · Sky images (HDRI): sun taken out of the image, linked file
+
+- **Context:** The owner's honest verdict on a ray-traced test render: "does not even look close to
+  photoreal". The largest single gap to the reference image was the sky: a flat procedural gradient
+  against a photographed cloudy dusk sky that also lights the scene. Free CC0 sky panoramas (Poly
+  Haven) are the standard source in archviz.
+- **Decision:**
+  - `Environment::sky.image` (absolute path of an equirectangular Radiance `.hdr`) and
+    `sky.imageRotationDegrees`. With an image, both engines use it for the background, reflections and
+    sky light; the path tracer samples it by brightness × solid angle (row/column CDFs over a 512 × 256
+    grid, MIS with the BSDF). The raster preview uses a blurred mip for its ambient light and
+    roughness-blurred mips for reflections.
+  - **The sun is taken out of the image** (`makeEnvironmentMap`): the brightest spot is a sun when it
+    is ≥ 50 × the median sky; its pixels above 20 × the median (or 1 % of its peak) are clamped and
+    the removed light becomes the analytic sun's direction, color and strength. Both engines then draw
+    a sharp sun with real shadows (shadow map, next-event estimation) instead of noise from a few
+    very bright pixels. Turning the sky turns its sun; *Sun strength* still scales it; the Sun
+    section's direction controls are replaced by a note while an image is used.
+  - Image values are used as render units × *Sky light*. Poly Haven images are not calibrated: an
+    image at 1 lights like a bright overcast day, so dusk scenes with lamps need *Sky light* around
+    0.01–0.05.
+  - The project stores the **path** (a linked file, like a texture source), not the pixels: a 4K
+    `.hdr` is 16–25 MB. Moving a project to another computer needs the image too.
+  - Loading (decode, sun extraction, sampling tables; ~1 s for 4K) runs on a worker thread; the
+    procedural sky shows meanwhile. Only `.hdr` for now (stb_image); EXR needs another decoder.
+- **Consequences:** physical sky (Hillaire) stays planned for 3.4; Environments (5.7) will bundle sky
+  images with ground and backdrop. Embedding or collecting linked sky images on save is open work
+  (ROADMAP 3.4). Calibrating image brightness (e.g. to measured lux) is open work.
+
+### D-029 · 2026-10-21 · Accepted · Render screen with an offscreen presenter
+
+- **Context:** The owner asked for a Lumion-style render screen instead of refining final images in
+  the editing viewport. A ray-traced render in the viewport paused whenever the window was covered
+  (frames only render while it is exposed), and its size was the viewport's.
+- **Decision:** `Renderer::createOffscreenPresenter(w, h)`: the same `Presenter` (raster preview,
+  path tracer, sky image, composite) with no surface: one sRGB target image, no acquire/present,
+  read-back always possible, no MSAA (the path tracer antialiases; a 4K multisampled target would not
+  fit an integrated GPU). `RenderScreen` is a third page of the main window next to the start screen
+  and the workspace: size (View, HD, Full HD, 4K), quality, speed, Render/Stop, progress with time
+  left, Save image (PNG/JPEG), Back/Esc. It renders the current view from
+  `ViewportWindow::renderScreenInput`; the editing viewport is hidden meanwhile, so the GPU is the
+  render's. A fresh presenter per render; it is freed when the render ends.
+- **Consequences:** Views (2.9) will let the screen render saved views instead of only the current
+  one; the gallery of results, batch queue, panoramas and passes remain 3.12 work.
+

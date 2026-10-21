@@ -209,8 +209,9 @@ void InspectorPanel::refresh() {
     if (!name_->hasFocus()) {
         name_->setText(QString::fromStdString(entity->name));
     }
-    kind_->setText(entity->meshInstance
-                       ? tr("Object")
+    kind_->setText(entity->meshInstance ? tr("Object")
+                   : entity->light
+                       ? tr("Light · change it in Light mode")
                        : tr("Group · %1").arg(ui::count(static_cast<int>(entity->children.size()),
                                                         tr("1 item"), tr("%1 items"))));
 

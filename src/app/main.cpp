@@ -85,7 +85,8 @@ int main(int argc, char* argv[]) {
         QStringLiteral("name"));
     const QCommandLineOption importOption(
         QStringLiteral("import"),
-        QStringLiteral("Import a model (.gltf, .glb, .obj, .fbx) or texture image after startup, as "
+        QStringLiteral("Import a model (.gltf, .glb, .obj, .fbx, .dae, .kmz, .3ds, .stl, .ply) or texture image "
+                       "after startup, as "
                        "if dropped on the window. Repeatable: models import one after another, "
                        "images become one material. Without --open/--sample, starts a new "
                        "project. Keeps the --mode workflow mode if given."),
@@ -132,6 +133,9 @@ int main(int argc, char* argv[]) {
     try {
         lb::render::RendererOptions options;
         options.enableValidation = parser.isSet(validationOption);
+        options.pipelineCache = std::filesystem::path(
+            QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation).toStdWString() +
+            L"/pipeline-cache.bin");
         renderer = std::make_unique<lb::render::Renderer>(options);
     } catch (const std::exception& e) {
         lb::log::error("Renderer initialization failed: {}", e.what());

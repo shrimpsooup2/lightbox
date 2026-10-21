@@ -6,8 +6,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include <QPointer>
 #include <QWidget>
 
+#include "app/property_widgets.hpp"
 #include "core/scene/scene.hpp"
 #include "core/scene/selection.hpp"
 
@@ -21,17 +23,12 @@ class QToolButton;
 class QTreeWidget;
 class QTreeWidgetItem;
 
-namespace lb::app::ui {
-class Section;
-class SegmentedControl;
-class SliderField;
-} // namespace lb::app::ui
-
 namespace lb::app {
 
 class TextureGrid;
 class TextureSlotWidget;
 class TextureThumbnails;
+class TextureBrowser;
 
 // Materials mode panel (D-019 style): actions (new, from a texture set, apply to the selection,
 // select users, delete), every material with a thumbnail and its usage, the selected material's
@@ -88,6 +85,7 @@ private:
     void applyToSelection();
     void createMaterial();
     void createFromTextures();
+    void openTextureLibrary();
     void setImporting(bool importing);
     void deleteMaterial();
     void removeUnusedTextures();
@@ -110,6 +108,8 @@ private:
 
     TextureThumbnails* thumbnails_ = nullptr;
 
+    QPushButton* library_ = nullptr;
+    QPointer<TextureBrowser> browser_;
     QPushButton* create_ = nullptr;
     QPushButton* fromTextures_ = nullptr;
     QPushButton* apply_ = nullptr;
@@ -138,6 +138,8 @@ private:
 
     ui::Section* occlusion_ = nullptr;
     TextureSlotWidget* occlusionMap_ = nullptr;
+    TextureSlotWidget* heightMap_ = nullptr; // in the Relief section
+    ui::SliderField* heightDepth_ = nullptr;
 
     ui::Section* mapping_ = nullptr;
     ui::SegmentedControl* mappingMode_ = nullptr;
@@ -145,7 +147,16 @@ private:
     QDoubleSpinBox* scaleY_ = nullptr;
     QToolButton* lockAspect_ = nullptr;
     QLabel* scaleLabel_ = nullptr;
+    ui::PropertyRow quickSizes_; // one-click tile sizes (box mapping)
     ui::SliderField* rotation_ = nullptr;
+    ui::SliderField* variation_ = nullptr;
+    ui::Section* glass_ = nullptr;
+    ui::SliderField* transmission_ = nullptr;
+    ui::SliderField* ior_ = nullptr;
+    QCheckBox* thinWalled_ = nullptr;
+    ui::SliderField* emissionStrength_ = nullptr;
+    QToolButton* glowSwatch_ = nullptr;
+    QCheckBox* randomTiles_ = nullptr;
     QDoubleSpinBox* offsetX_ = nullptr;
     QDoubleSpinBox* offsetY_ = nullptr;
 

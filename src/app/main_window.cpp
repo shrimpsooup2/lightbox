@@ -1,6 +1,7 @@
 #include "app/main_window.hpp"
 
 #include <algorithm>
+#include <filesystem>
 
 #include <QAction>
 #include <QActionGroup>
@@ -21,6 +22,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QToolBar>
@@ -36,17 +38,19 @@
 #include "app/outliner_panel.hpp"
 #include "app/project_controller.hpp"
 #include "app/render_panel.hpp"
+#include "app/render_screen.hpp"
 #include "app/start_screen.hpp"
 #include "app/theme.hpp"
 #include "app/ui_helpers.hpp"
 #include "app/viewport_window.hpp"
+#include "core/environment_map.hpp"
 #include "core/log.hpp"
 
 namespace lb::app {
 namespace {
 
-// Bump when docks are added/renamed so stale saved layouts are ignored.
-constexpr int kLayoutVersion = 3;
+// Bump when docks are added/renamed or default sizes change, so stale saved layouts are ignored.
+constexpr int kLayoutVersion = 6;
 
 QString layoutKey(WorkspaceMode mode) {
     return QStringLiteral("workspace/layout/%1").arg(QLatin1String(workspaceModeInfo(mode).key));
@@ -71,7 +75,8 @@ QWidget* makeBuildPage(QWidget* parent) {
     QWidget* page = makeComingSoonPage(
         QStringLiteral("blocks"), QObject::tr("Asset library coming soon"),
         QObject::tr("You'll drag furniture, people, cars and trees straight into the scene. For now, "
-                    "pick objects in the Scene panel and move them in Properties."),
+                    "click an object to select it, then drag the arrows to move it, the rings to "
+                    "turn it and the small squares to scale it (the middle one evenly)."),
         {}, parent);
     auto* layout = static_cast<QVBoxLayout*>(page->layout());
     layout->insertWidget(layout->count() - 1, ui::sectionHeader(QObject::tr("Moving around"), page));
@@ -79,9 +84,15 @@ QWidget* makeBuildPage(QWidget* parent) {
     grid->setHorizontalSpacing(16);
     grid->setVerticalSpacing(6);
     const std::pair<QString, QString> controls[] = {
+        {QObject::tr("Select"), QObject::tr("Click an object")},
+        {QObject::tr("Move"), QObject::tr("Drag an arrow or the square")},
+        {QObject::tr("Turn"), QObject::tr("Drag a ring")},
+        {QObject::tr("Scale"), QObject::tr("Drag a small square")},
+        {QObject::tr("Exact steps"), QObject::tr("Shift while dragging")},
         {QObject::tr("Orbit"), QObject::tr("Left or middle drag")},
         {QObject::tr("Pan"), QObject::tr("Right drag, or Shift + drag")},
         {QObject::tr("Zoom"), QObject::tr("Mouse wheel")},
+        {QObject::tr("Walk"), QObject::tr("Footprints, then click")},
         {QObject::tr("Frame everything"), QObject::tr("F")},
         {QObject::tr("Reset the view"), QObject::tr("Home")},
     };
@@ -102,6 +113,7 @@ MainWindow::MainWindow(render::Renderer& renderer, QVulkanInstance& vulkan, Scen
                        QWidget* parent)
     : QMainWindow(parent),
       renderer_(renderer),
+      scene_(scene),
       sceneSync_(std::make_unique<render::SceneSync>(scene, renderer)),
       selection_(std::make_unique<Selection>(scene)) {
     setWindowTitle(QStringLiteral("LightBox"));
@@ -109,7 +121,7 @@ MainWindow::MainWindow(render::Renderer& renderer, QVulkanInstance& vulkan, Scen
     resize(1440, 880);
     setAcceptDrops(true); // models, images and projects can be dropped anywhere on the window
 
-    viewport_ = new ViewportWindow(renderer, vulkan, scene, *sceneSync_);
+    viewport_ = new ViewportWindow(renderer, vulkan, scene, *selection_, *sceneSync_);
     project_ = new ProjectController(scene, *viewport_, this);
     createActions();
 
@@ -126,6 +138,11 @@ MainWindow::MainWindow(render::Renderer& renderer, QVulkanInstance& vulkan, Scen
     toolbar->addAction(resetViewAction_);
     toolbar->addSeparator();
     toolbar->addAction(gridAction_);
+    toolbar->addAction(walkAction_);
+    toolbar->addSeparator();
+    toolbar->addActions(orbitGroup_->actions());
+    toolbar->addSeparator();
+    toolbar->addAction(rayAction_);
     centerLayout->addWidget(toolbar);
     viewportContainer_ = QWidget::createWindowContainer(viewport_, workspacePage_);
     viewportContainer_->setFocusPolicy(Qt::StrongFocus);
@@ -134,6 +151,9 @@ MainWindow::MainWindow(render::Renderer& renderer, QVulkanInstance& vulkan, Scen
     pages_->addWidget(workspacePage_);
     startScreen_ = new StartScreen(*project_, pages_);
     pages_->addWidget(startScreen_);
+    renderScreen_ = new RenderScreen(renderer_, *viewport_, pages_);
+    pages_->addWidget(renderScreen_);
+    connect(renderScreen_, &RenderScreen::closeRequested, this, &MainWindow::closeRenderScreen);
     pages_->setCurrentWidget(workspacePage_);
     setCentralWidget(pages_);
 
@@ -156,8 +176,45 @@ MainWindow::MainWindow(render::Renderer& renderer, QVulkanInstance& vulkan, Scen
                                   .arg(message));
     });
     connect(viewport_, &ViewportWindow::filesDropped, this, &MainWindow::openDroppedFiles);
+    // Clicking an object in the viewport selects it (Materials then shows its material).
+    connect(viewport_, &ViewportWindow::entityClicked, this,
+            [this](EntityId entity) { selection_->select(entity); });
+    connect(viewport_, &ViewportWindow::hint, this, [this](const QString& text) {
+        if (text.isEmpty()) {
+            statusBar()->clearMessage();
+        } else {
+            statusBar()->showMessage(text);
+        }
+    });
+    // Ray tracing progress in the status bar (it refines while the user works in any mode).
+    rayLabel_ = new QLabel(this);
+    rayLabel_->setProperty("muted", true);
+    rayLabel_->hide();
+    rayBar_ = new QProgressBar(this);
+    rayBar_->setTextVisible(false);
+    rayBar_->setFixedSize(120, 6);
+    rayBar_->hide();
+    statusBar()->addPermanentWidget(rayLabel_);
+    statusBar()->addPermanentWidget(rayBar_);
+    connect(viewport_, &ViewportWindow::rayTracingProgress, this,
+            [this](const render::RayTracingStatus& status) {
+                rayLabel_->setVisible(status.active);
+                rayLabel_->setText(rayStatusText(status));
+                const bool refining = status.active && !status.preparing &&
+                                      status.samples < status.targetSamples;
+                rayBar_->setVisible(refining);
+                rayBar_->setRange(0, static_cast<int>(std::max(status.targetSamples, 1u)));
+                rayBar_->setValue(static_cast<int>(status.samples));
+            });
+    connect(viewport_, &ViewportWindow::walkModeChanged, walkAction_, [this](bool on) {
+        const QSignalBlocker block(walkAction_);
+        walkAction_->setChecked(on);
+    });
     connect(importPanel_, &ImportPanel::statusMessage, this,
             [this](const QString& text) { statusBar()->showMessage(text, 10000); });
+    connect(viewport_, &ViewportWindow::skyImageFailed, this, [this](const QString& text) {
+        statusBar()->showMessage(tr("The sky image could not be used: %1").arg(text), 15000);
+    });
     connect(importPanel_, &ImportPanel::busyChanged, importProgress_, &QWidget::setVisible);
     connect(importPanel_, &ImportPanel::progressChanged, importProgress_, &QProgressBar::setValue);
     connect(importPanel_, &ImportPanel::materialImported, this,
@@ -229,7 +286,7 @@ void MainWindow::createActions() {
     importAction_ = new QAction(theme::icon(QStringLiteral("download")), tr("&Import Model…"), this);
     importAction_->setShortcut(Qt::CTRL | Qt::Key_I);
     importAction_->setShortcutContext(Qt::ApplicationShortcut);
-    importAction_->setToolTip(tr("Import a glTF, OBJ or FBX model (Ctrl+I)"));
+    importAction_->setToolTip(tr("Import a model: Collada (.dae, from SketchUp), glTF, FBX, OBJ, KMZ, 3DS, STL or PLY (Ctrl+I)"));
     connect(importAction_, &QAction::triggered, this, [this] {
         if (onStartScreen_) {
             newProject(); // importing from the start screen starts a project for the model
@@ -245,6 +302,11 @@ void MainWindow::createActions() {
     textureSetAction_->setToolTip(tr("Make one material from a set of PBR texture images"));
     connect(textureSetAction_, &QAction::triggered, this,
             [this] { importPanel_->chooseTextureSet(); });
+    renderImageAction_ =
+        projectAction("sparkles", tr("&Render Image…"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R),
+                      tr("Make the final ray-traced image of the current view on the render "
+                         "screen (Ctrl+Shift+R)"));
+    connect(renderImageAction_, &QAction::triggered, this, &MainWindow::showRenderScreen);
 
     // The view actions only make sense in the workspace (disabled on the start screen).
     frameAction_ = new QAction(theme::icon(QStringLiteral("scan")), tr("&Frame Scene"), this);
@@ -266,6 +328,71 @@ void MainWindow::createActions() {
     gridAction_->setShortcutContext(Qt::ApplicationShortcut);
     gridAction_->setToolTip(tr("Show ground grid (G)"));
     connect(gridAction_, &QAction::toggled, viewport_, &ViewportWindow::setGridVisible);
+
+    walkAction_ = new QAction(theme::icon(QStringLiteral("footprints")), tr("&Walk"), this);
+    walkAction_->setCheckable(true);
+    walkAction_->setToolTip(tr("Walk through the design: click where you want to stand, then W A S "
+                               "D or arrow keys to move and drag to look around (Esc stops)"));
+    connect(walkAction_, &QAction::toggled, this, [this](bool on) {
+        viewport_->setWalkMode(on);
+        if (on) {
+            viewportContainer_->setFocus();
+        }
+    });
+
+    rayAction_ = new QAction(theme::icon(QStringLiteral("sparkles")), tr("&Ray Traced View"), this);
+    rayAction_->setCheckable(true);
+    rayAction_->setShortcut(Qt::Key_R);
+    rayAction_->setShortcutContext(Qt::ApplicationShortcut);
+    rayAction_->setToolTip(tr("Ray traced view (R): real reflections, glass, soft shadows and "
+                              "bounced light. Refines while you watch; quality and speed in Render "
+                              "mode"));
+    connect(rayAction_, &QAction::toggled, this, [this](bool on) {
+        render::RayTracingSettings settings = viewport_->rayTracing();
+        if (settings.enabled != on) {
+            settings.enabled = on;
+            viewport_->setRayTracing(settings);
+        }
+    });
+    connect(viewport_, &ViewportWindow::rayTracingChanged, rayAction_, [this] {
+        const QSignalBlocker block(rayAction_);
+        rayAction_->setChecked(viewport_->rayTracing().enabled);
+    });
+
+    // Orbit modes: what a left/middle drag turns around. Remembered between sessions.
+    orbitGroup_ = new QActionGroup(this);
+    struct OrbitChoice {
+        OrbitMode mode;
+        const char* icon;
+        QString text;
+        QString tip;
+    };
+    const OrbitChoice orbitChoices[] = {
+        {OrbitMode::Model, "rotate-3d", tr("Orbit around the &Model"),
+         tr("Orbit around the model: dragging turns the view around the middle of the model")},
+        {OrbitMode::Cursor, "locate-fixed", tr("Orbit around the &Cursor"),
+         tr("Orbit around the cursor: dragging turns the view around the point you grab, like "
+            "SketchUp")},
+        {OrbitMode::Look, "scan-eye", tr("&Look Around"),
+         tr("Look around: the camera stays where it is and turns, like turning your head")},
+    };
+    const int savedOrbit = QSettings().value(QStringLiteral("viewport/orbitMode"), 0).toInt();
+    for (const OrbitChoice& choice : orbitChoices) {
+        auto* action = orbitGroup_->addAction(theme::icon(QString::fromLatin1(choice.icon)),
+                                              choice.text);
+        action->setCheckable(true);
+        action->setToolTip(choice.tip);
+        action->setData(static_cast<int>(choice.mode));
+        action->setChecked(static_cast<int>(choice.mode) == savedOrbit);
+        connect(action, &QAction::triggered, this, [this, mode = choice.mode] {
+            viewport_->setOrbitMode(mode);
+            QSettings().setValue(QStringLiteral("viewport/orbitMode"), static_cast<int>(mode));
+        });
+    }
+    if (orbitGroup_->checkedAction() == nullptr) {
+        orbitGroup_->actions().constFirst()->setChecked(true);
+    }
+    viewport_->setOrbitMode(static_cast<OrbitMode>(orbitGroup_->checkedAction()->data().toInt()));
 
     modeGroup_ = new QActionGroup(this);
     for (const WorkspaceModeInfo& info : workspaceModes()) {
@@ -366,8 +493,10 @@ void MainWindow::createDocks(Scene& scene) {
         tr("Shape the ground around your building, plant the garden and add water."),
         {tr("Terrain, paths and building pads"), tr("Trees, hedges and groundcover"),
          tr("Pools, fountains, ponds and streams")}));
-    modePages_->addWidget(new LightPanel(scene));
-    modePages_->addWidget(new RenderPanel(scene, *viewport_));
+    modePages_->addWidget(new LightPanel(scene, *selection_, *viewport_));
+    auto* renderPanel = new RenderPanel(scene, *viewport_);
+    connect(renderPanel, &RenderPanel::renderScreenRequested, this, &MainWindow::showRenderScreen);
+    modePages_->addWidget(renderPanel);
 
     modeDock_ = addPanel(tr("Build"), "dock.mode", modePages_, &modeTitle_);
     sceneDock_ = addPanel(tr("Scene"), "dock.scene", new OutlinerPanel(scene, *selection_));
@@ -380,6 +509,10 @@ void MainWindow::showModePage(WorkspaceMode mode) {
     modeTitle_->setText(workspaceModeInfo(mode).title);
     modeDock_->setWindowTitle(workspaceModeInfo(mode).title);
     modeActions_.at(mode)->setChecked(true);
+    // Moving things is for placing models, arranging the design and aiming lights, not for
+    // picking materials.
+    viewport_->setGizmoEnabled(mode == WorkspaceMode::Import || mode == WorkspaceMode::Build ||
+                               mode == WorkspaceMode::Light);
 }
 
 void MainWindow::applyDefaultLayout() {
@@ -393,7 +526,9 @@ void MainWindow::applyDefaultLayout() {
     for (QDockWidget* dock : {modeDock_, sceneDock_, propertiesDock_}) {
         dock->show();
     }
-    resizeDocks({modeDock_, sceneDock_}, {300, 330}, Qt::Horizontal);
+    // The mode panel holds dense property rows (D-019); 360 px fits a label column, a slider and
+    // a number field, or a texture slot with its channel and invert controls.
+    resizeDocks({modeDock_, sceneDock_}, {360, 300}, Qt::Horizontal);
     resizeDocks({sceneDock_, propertiesDock_}, {400, 400}, Qt::Vertical);
 }
 
@@ -406,6 +541,7 @@ void MainWindow::restoreLayout(WorkspaceMode mode) {
 }
 
 void MainWindow::setMode(WorkspaceMode mode) {
+    closeRenderScreen(); // switching modes means editing again
     showModePage(mode);
     if (mode == mode_) {
         return;
@@ -444,7 +580,7 @@ void MainWindow::loadWorkspaces() {
 }
 
 void MainWindow::saveWorkspaces() {
-    if (!onStartScreen_) {
+    if (!onStartScreen_ && !onRenderScreen_) { // those pages hide the docks
         layouts_[mode_] = saveState(kLayoutVersion);
     }
     QSettings settings;
@@ -468,6 +604,8 @@ void MainWindow::createMenus() {
     file->addSeparator();
     file->addAction(importAction_);
     file->addAction(textureSetAction_);
+    file->addSeparator();
+    file->addAction(renderImageAction_);
     file->addSeparator();
     QAction* quit = file->addAction(tr("E&xit"), this, &QWidget::close);
     quit->setShortcut(QKeySequence::Quit);
@@ -494,6 +632,10 @@ void MainWindow::createMenus() {
     view->addAction(frameAction_);
     view->addAction(resetViewAction_);
     view->addAction(gridAction_);
+    view->addAction(walkAction_);
+    view->addSeparator();
+    view->addActions(orbitGroup_->actions());
+    view->addAction(rayAction_);
     view->addSeparator();
     QMenu* themeMenu = view->addMenu(tr("&Theme"));
     themeMenu->addAction(darkThemeAction_);
@@ -577,7 +719,22 @@ void MainWindow::openDroppedFiles(const QStringList& paths) {
             return; // the user kept the current project open
         }
     }
-    importFiles(paths);
+    // A sky panorama (.hdr) becomes the sky; everything else is imported.
+    QStringList imports;
+    for (const QString& path : paths) {
+        if (isEnvironmentMapFile(std::filesystem::path(path.toStdWString()))) {
+            Environment environment = scene_.environment();
+            environment.sky.image = QFileInfo(path).absoluteFilePath().toStdString();
+            scene_.setEnvironment(environment);
+            setMode(WorkspaceMode::Light);
+            statusBar()->showMessage(tr("Sky image: %1").arg(QFileInfo(path).fileName()), 10000);
+        } else {
+            imports << path;
+        }
+    }
+    if (!imports.isEmpty()) {
+        importFiles(imports);
+    }
 }
 
 void MainWindow::importFiles(const QStringList& paths, bool switchMode) {
@@ -626,9 +783,14 @@ void MainWindow::showStartScreen() {
     if (onStartScreen_) {
         return;
     }
-    // Remember the workspace arrangement before the docks go away. Before the first show() the
-    // saved layout from loadWorkspaces() is still current, and a hidden window's state would not be.
-    if (isVisible()) {
+    if (onRenderScreen_) {
+        // Its docks are already hidden and the layout was saved when it opened.
+        renderScreen_->stop();
+        onRenderScreen_ = false;
+    } else if (isVisible()) {
+        // Remember the workspace arrangement before the docks go away. Before the first show()
+        // the saved layout from loadWorkspaces() is still current, and a hidden window's state
+        // would not be.
         layouts_[mode_] = saveState(kLayoutVersion);
     }
     onStartScreen_ = true;
@@ -651,6 +813,35 @@ void MainWindow::showWorkspace() {
     viewportContainer_->setFocus();
 }
 
+void MainWindow::showRenderScreen() {
+    if (onStartScreen_ || onRenderScreen_) {
+        return;
+    }
+    if (isVisible()) {
+        layouts_[mode_] = saveState(kLayoutVersion);
+    }
+    onRenderScreen_ = true;
+    for (QDockWidget* dock : {modeDock_, sceneDock_, propertiesDock_}) {
+        dock->hide();
+    }
+    statusBar()->hide(); // the render screen shows its own progress
+    pages_->setCurrentWidget(renderScreen_);
+    renderScreen_->prepare(project_->name());
+}
+
+void MainWindow::closeRenderScreen() {
+    if (!onRenderScreen_) {
+        return;
+    }
+    renderScreen_->stop();
+    onRenderScreen_ = false;
+    pages_->setCurrentWidget(workspacePage_);
+    showModePage(mode_);
+    restoreLayout(mode_); // also brings the docks back
+    statusBar()->show();
+    viewportContainer_->setFocus();
+}
+
 void MainWindow::setStartScreenChrome(bool startScreen) {
     // The header keeps the brand and the theme switch; mode bar, project name and Projects button
     // only mean something inside a project.
@@ -659,7 +850,8 @@ void MainWindow::setStartScreenChrome(bool startScreen) {
     projectsAction_->setVisible(!startScreen);
     projectLabelAction_->setVisible(!startScreen);
     for (QAction* action : {saveAction_, saveAsAction_, closeProjectAction_, textureSetAction_,
-                            frameAction_, resetViewAction_, gridAction_}) {
+                            frameAction_, resetViewAction_, gridAction_, walkAction_,
+                            rayAction_, renderImageAction_}) {
         action->setEnabled(!startScreen);
     }
     modeMenu_->menuAction()->setEnabled(!startScreen);

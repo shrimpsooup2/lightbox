@@ -272,11 +272,22 @@ void warnOnce(ImportedModel& model, std::string warning) {
     }
 }
 
+UnitGuess guessUnits(float largestExtent) {
+    if (largestExtent > 5000.0f) {
+        return {0.001, "millimeters"};
+    }
+    if (largestExtent > 500.0f) {
+        return {0.01, "centimeters"};
+    }
+    return {1.0, "meters"};
+}
+
 } // namespace detail
 
 namespace {
 
-constexpr std::array<std::string_view, 4> kModelExtensions = {".gltf", ".glb", ".obj", ".fbx"};
+constexpr std::array<std::string_view, 9> kModelExtensions = {
+    ".gltf", ".glb", ".obj", ".fbx", ".dae", ".kmz", ".3ds", ".stl", ".ply"};
 
 constexpr std::array<UnitChoice, 5> kUnitChoices = {{
     {"Meters", 1.0},
@@ -326,9 +337,15 @@ ImportedModel importModel(const std::filesystem::path& path, const Progress& pro
         } else if (ext == ".fbx") {
             model.format = "FBX";
             detail::importFbx(path, model, job);
+        } else if (ext == ".dae" || ext == ".kmz") {
+            model.format = ext == ".kmz" ? "KMZ (Collada)" : "Collada";
+            detail::importAssimp(path, model, job);
+        } else if (ext == ".3ds" || ext == ".stl" || ext == ".ply") {
+            model.format = ext == ".3ds" ? "3DS" : ext == ".stl" ? "STL" : "PLY";
+            detail::importAssimp(path, model, job);
         } else {
             throw ImportError(std::format("{} is not a model format LightBox can import (use glTF, "
-                                          "GLB, OBJ or FBX).",
+                                          "GLB, OBJ, FBX, Collada, KMZ, 3DS, STL or PLY).",
                                           fileName));
         }
     } catch (const ImportError&) {

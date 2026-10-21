@@ -60,6 +60,8 @@ undo and CI, so Stage 1 has something to import into.*
   *Accept:* every document mutation goes through a command; undo/redo round-trips exactly. *Note:* the
   selection set (`core/scene/selection.*`) already exists (pulled forward for the outliner/inspector,
   D-016); the inspector and outliner currently edit the scene directly and must move to commands here.
+  Click-to-select in the viewport is pulled forward with a CPU raycast (`core/raycast.*`, D-024); the GPU ID
+  buffer and highlight outline remain.
 - [ ] **0.8 Tests & CI.** Harness exists (`tests/`, doctest, `ctest --preset`); add file round-trip and
   undo tests as 0.6/0.7 land. GitHub Actions: Windows MSVC + Linux GCC builds and tests, clang-format check, and a Linux job
   that runs `LightBox --validation --screenshot` under Xvfb with Mesa lavapipe + Khronos validation layers.
@@ -77,6 +79,9 @@ and updated later without losing work.*
   stats). *Accept:* a dummy importer shows progress, can be cancelled, and reports. *Note (D-021):*
   `src/import/` (lb_import, Qt-free) + Import panel; dispatch by extension (no content sniffing yet); the
   units check is a "Guessed — check" line in the panel's Report instead of a toast; recentering > 10 km.
+  Every import is set on the ground (lowest point at z = 0) at the drop point in the viewport, else
+  beside the existing content (1 m apart), else at the origin; files without axis information (OBJ, STL, PLY) are stood upright when their geometry
+  clearly says so (`core/placement.*`, D-026).
 - [~] **1.2 Mesh processing.** Triangulation, vertex welding, normal generation with crease angle,
   MikkTSpace tangents, degenerate/duplicate cleanup, merge-by-material, instance detection (repeated
   blocks/components → instances), meshoptimizer for vertex cache/LOD. *Accept:* a 1M-triangle model imports
@@ -90,7 +95,9 @@ and updated later without losing work.*
 - [~] **1.4 FBX, DAE, 3DS, STL, PLY.** ufbx for FBX; Assimp (or focused readers) for the rest; layer/
   material names preserved. *Accept:* FBX exports from Revit/3ds Max/SketchUp import with correct units.
   *Done:* FBX via ufbx (units from the file, Z-up conversion, instancing, PBR + classic materials,
-  embedded textures). *Remaining:* DAE, 3DS, STL, PLY; checks with real Revit/3ds Max/SketchUp exports.
+  embedded textures); Collada (`.dae`, SketchUp's free export; units and up axis from the file), KMZ
+  (zipped Collada, unpacked with miniz), 3DS, STL, PLY via Assimp with only those importers (D-025).
+  *Remaining:* checks with real Revit/3ds Max/SketchUp exports.
 - [ ] **1.5 Rhino & SketchUp.** openNURBS for `.3dm` (render meshes, layers, materials, blocks →
   instances). SketchUp `.skp` via the official C SDK as an **optional plugin** (license check recorded);
   without it, guided fallback (export glTF/FBX/DAE). *Accept:* layers/tags become LightBox layers,
@@ -114,12 +121,16 @@ and updated later without losing work.*
   for CAD geometry without UVs**. *Accept:* dropping a Poly Haven texture folder on a wall makes a correct
   material at real-world scale. *Done:* stb_image decode (capped 4096 px), GPU mips, bindless textures,
   map detection incl. packed ARM/ORM and GL-over-DX normals, material from dropped images (applied to the
-  selection), triplanar box mapping in meters, normal/AO maps. *Remaining:* EXR (tinyexr), BC7/KTX2
-  cache, folder/zip drops, real-world size from pack metadata.
-- [ ] **1.10 Asset library core.** Asset manifest (`asset.json`: id, name, category, tags, license, author,
+  selection), triplanar box mapping in meters, normal/AO maps; zip and folder packs (ambientCG, Poly
+  Haven, Poliigon naming incl. workflow suffixes, D-023); distance quality: sRGB-correct mips, normal-map specular AA, per-material Variation with distance-faded anti-tiling, optional **random per-tile rotation** (Mapping checkbox, off by default). *Remaining:* EXR (tinyexr), BC7/KTX2 cache.
+- [~] **1.10 Asset library core.** Asset manifest (`asset.json`: id, name, category, tags, license, author,
   source URL, real-world size, LODs, thumbnail), SQLite index, user library folders, thumbnail baking via
   the renderer, pack download for CC0 sources (Poly Haven, ambientCG) with license tracking and attribution
-  export. *Accept:* install a pack, search it, see thumbnails, export attributions.
+  export. *Accept:* install a pack, search it, see thumbnails, export attributions. *Done (textures):*
+  online texture library (Materials ▸ Texture library…) searches ambientCG and Poly Haven, downloads
+  sets into `%LOCALAPPDATA%/LightBox/Library/Textures` with a JSON record (source, license, size) and
+  applies them at real-world size (D-023). *Remaining:* models/props, SQLite index, browsing the local
+  library offline, user folders, attribution export.
 - [ ] **1.11 Props placement.** Drag from library onto surfaces (raycast, align to surface or up), drop to
   floor, snapping, instancing, quick rotate/scale. *Accept:* place 500 chairs smoothly; they are instances.
 - [ ] **1.12 Plants.** Plant asset spec (LOD0–LOD2 meshes + octahedral impostor, two-sided translucent
@@ -164,10 +175,16 @@ and updated later without losing work.*
   HUD), navigation presets (SketchUp, Revit, Rhino, Blender), walk mode (WASD, eye height 1.6 m, gravity
   optional), frame selected, standard views, **two-point perspective (vertical correction)**, focal length in mm.
   *Accept:* each preset matches its source app's mouse mapping. *Pulled forward:* focal length (8–300 mm,
-  quick lenses), two-point perspective, eye level (Render ▸ Camera, D-020).
-- [ ] **2.5 Selection & transform tools.** Click/box select, move/rotate/scale gizmos, snapping (grid,
+  quick lenses), two-point perspective, eye level (Render ▸ Camera, D-020); **walk mode** (toolbar *Walk*:
+  click where to stand, W A S D / arrows, drag to look, Shift runs, Q/E down/up, Esc; slides along walls;
+  CPU raycast `core/raycast.*`, D-024); **orbit modes** (toolbar: around the model, around the point
+  under the cursor, look around; remembered); renderer-drawn overlay lines (gizmos, D-026).
+- [~] **2.5 Selection & transform tools.** Click/box select, move/rotate/scale gizmos, snapping (grid,
   vertex, edge, face, midpoint), numeric entry, align/distribute, array along line/path. *Accept:* every
-  tool undoable; numeric entry respects project units.
+  tool undoable; numeric entry respects project units. *Done (D-024, D-026):* click select; move/rotate/
+  scale gizmo in Import and Build modes (X/Y/Z arrows, ground square, X/Y/Z rings, X/Y/Z scale squares
+  and an even-scale center; Shift snaps 0.1 m / 15° / 10 %; the whole selection, groups once).
+  *Remaining:* undo (needs 0.7 commands), box select, geometry snapping, numeric entry, align/distribute, arrays.
 - [ ] **2.6 Property system & inspector.** Reflected properties → auto-generated inspector (unit-aware
   sliders, Kelvin/color pickers, texture slots), multi-edit, presets. *Accept:* adding a property to a
   component needs no hand-written widget code.
@@ -201,6 +218,10 @@ scenes; the Final engine (Cycles) competes with V-Ray/Corona. Same scene, materi
   tiers (**Laptop / Balanced / High / RT**), GPU timestamps profiler overlay. *Accept:* passes declared, not
   hand-synchronized; tier switch at runtime. *Done:* bindless texture table (descriptor indexing) and
   per-frame material buffer via buffer device address (D-021). *Remaining:* everything else.
+- [ ] **3.2a HDR target & composite.** The scene (raster or ray traced) renders into a linear HDR image;
+  one composite pass applies exposure, white balance, contrast, saturation, tone mapping (Filmic, Neutral,
+  AgX, none) and vignette into the swapchain; overlays (gizmos) draw after it. *Accept:* same look as
+  before for raster, no per-pass tone mapping left, ray-traced output displays through the same pass.
 - [~] **3.2 HDR pipeline & physical camera.** Linear HDR targets, exposure (EV100 / ISO / shutter / aperture),
   auto-exposure (histogram), tonemappers (AgX default, Khronos PBR Neutral, ACES), white balance, bloom,
   vignette, chromatic aberration (subtle), color management (sRGB/Display P3; OpenColorIO optional).
@@ -209,12 +230,19 @@ scenes; the Final engine (Cycles) competes with V-Ray/Corona. Same scene, materi
 - [~] **3.3 Materials v1 (GPU).** LightBox material model, aligned with OpenPBR Surface: base, metalness,
   roughness, specular, coat, sheen, transmission (thin and solid), emission, opacity/cutout, foliage
   translucency, normal/bump, height (parallax first). Architecture preset library. *Done:* base color,
-  roughness, metalness, normal and occlusion maps. *Remaining:* the rest of the list.
+  roughness, metalness, normal and occlusion maps, height (parallax), **glass** (transmission, IOR, thin
+  panes and solid glass; sorted transparent pass in the raster view; Materials ▸ Glass & glow presets),
+  **emission** (nits); glTF see-through materials import as glass. *Remaining:* coat, sheen, cut-out
+  opacity (leaves, fences), foliage translucency, presets library.
 - [~] **3.4 Sun, sky & lights.** Physically based atmosphere (Hillaire 2020), solar position from
   location/date/time (NOAA/SPA), HDRI environments, sky-light IBL (filtered probes), point/spot/area (rect,
   disk, tube) lights, IES profiles, photometric units (lumens, candela, lux, Kelvin). *Done early:* solar
   position (NOAA, `core/solar.*`, tested), site location/date/time + manual modes, Kelvin sun color, sun
-  strength, sky light (Light panel, D-020).
+  strength, sky light (Light panel, D-020); point/spot/area lights in lumens and Kelvin (Light panel,
+  icons and gizmo in the viewport); **sky images** (`.hdr` panoramas, chosen in Light ▸ Sky or dropped
+  on the viewport, turnable; the image's sun becomes the analytic sun, D-028). *Open:* physical
+  atmosphere, embedding/collecting linked sky images with the project, brightness calibration, EXR,
+  IES, tube/disk lights, light shadows in the raster view.
 - [~] **3.5 Shadows.** Cascaded/virtual shadow maps for the sun, local light shadows (atlas), soft area
   shadows (PCSS), contact shadows; RT shadows on the RT tier. *Interim:* one fitted 2048² sun shadow map
   with rotated-Poisson PCF and a softness control (D-020).
@@ -223,8 +251,32 @@ scenes; the Final engine (Cycles) competes with V-Ray/Corona. Same scene, materi
   Interiors are the hard case and the benchmark. *Accept:* a daylit interior looks plausible on the Laptop tier.
 - [ ] **3.7 Reflections.** SSR, parallax-corrected reflection probes (per room/zone), planar reflections
   for mirrors/water on raster tiers; RT reflections on the RT tier.
-- [ ] **3.8 Hardware ray tracing tier.** BLAS/TLAS management (`VK_KHR_acceleration_structure`), ray-query
-  GI/reflections/shadows, spatiotemporal denoising. Always optional with a non-RT fallback.
+- [ ] **3.8 Ray tracing (the quality renderer, every GPU; owner priority, D-027).** A progressive path
+  tracer in Vulkan compute that runs on any Vulkan 1.3 GPU and uses hardware ray tracing where present.
+  Low-end machines reach the same quality by taking longer, never by freezing; high-end machines go
+  faster or higher.
+  - [x] **3.8a Path tracer core.** CPU-built BVH (binned SAH, background thread) over all instances;
+    compute shader with BVH traversal, camera jitter, PBR (base color/roughness/metalness/normal maps
+    from the bindless table), sun with soft shadows (next-event estimation), sky lighting, glass
+    (refraction, Fresnel, thin panes), Russian roulette; progressive accumulation in the HDR target;
+    adaptive per-frame time budget from GPU timestamps with work split into tiles (Gentle / Balanced /
+    Fast) and a target sample count (Draft / Good / Final), then the GPU idles; Render ▸ Ray traced
+    toggle with progress. *Accept:* the sample house with glass converges on the Iris Xe without UI
+    stalls; a scene change restarts accumulation. *Done (D-027):* also progress bar with elapsed time and
+    time left (Render panel and status bar). Speed on Iris Xe ≈ 1 M pixel-samples/s (Good, 256 samples
+    at 1259×770 in ~7½ min); splitting the shader into wavefront kernels is the next speed step.
+  - [ ] **3.8b Hardware ray query backend.** BLAS per mesh / TLAS over instances
+    (`VK_KHR_acceleration_structure`, `VK_KHR_ray_query`) replacing software traversal when available;
+    same images as 3.8a.
+  - [ ] **3.8c Denoising.** Albedo/normal guided denoiser (GPU à-trous/SVGF-style first; OIDN where it
+    can be built), so previews look clean after few samples.
+  - [~] **3.8d Lights and emission in the path tracer.** Point/spot/area lights, emissive materials, IES,
+    many-light sampling; HDRI environments with importance sampling. *Done:* point/spot/area lights
+    (next-event estimation + MIS, one light picked per bounce), emissive materials, sky images with
+    importance sampling (D-028). *Open:* IES, many-light sampling (light BVH) for scenes with dozens of
+    lamps.
+  - [ ] **3.8e Ray-traced effects in the raster view.** Ray-traced shadows, reflections and GI for the
+    interactive view on fast GPUs (with denoising).
 - [ ] **3.9 Anti-aliasing & upscaling.** TAA with reactive masks, AMD FSR (MIT) upscaling, transparency and
   foliage stability.
 - [ ] **3.10 Cycles integration (Final engine).** Build Cycles standalone as a library
@@ -234,9 +286,16 @@ scenes; the Final engine (Cycles) competes with V-Ray/Corona. Same scene, materi
   light groups for post-render light mixing.
 - [ ] **3.11 Look parity Live ↔ Final.** Calibration scenes + automated image comparison (exposure, sun
   intensity, material response) within a documented tolerance.
-- [ ] **3.12 Output.** Stills up to 8K+ (tiled), render passes/AOVs (beauty, diffuse, specular, emission,
+- [~] **3.12 Output.** Stills up to 8K+ (tiled), render passes/AOVs (beauty, diffuse, specular, emission,
   depth, normal, AO, object/material masks, Cryptomatte), EXR/PNG/JPG/TIFF, batch render queue of Views,
   360° equirectangular panoramas, orthographic elevations/plans, section cut planes with poché.
+  **Render screen (owner request):** final images are made on a dedicated render screen, as in
+  Lumion — pick the View(s), resolution, quality and output, press Render, watch the progress and
+  the image fill in, find results in a gallery — rather than only refining in the editing viewport
+  (which keeps the quick preview and the optional ray-traced view). *Done (D-029):* the render
+  screen for the current view (File ▸ Render Image…, Ctrl+Shift+R, or Render ▸ Render image…):
+  size View/HD/Full HD/4K, quality, speed, live preview, progress with time left, Save image
+  (PNG/JPEG), offscreen so it never pauses. *Open:* picking saved Views, results gallery, queue.
 - [ ] **3.13 Styles & post.** One-click looks (Morning, Golden hour, Overcast, Dusk, Night interior, Clay,
   White model, Sketch/line art outlines), color grading with LUTs, depth of field.
 - [ ] **3.14 Animation & video.** Camera paths (keyframes, splines), sun studies (date/time animation),

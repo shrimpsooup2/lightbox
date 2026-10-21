@@ -16,6 +16,13 @@ constexpr float kMaxDistance = 100000.0f;
 constexpr float kMaxPitch = glm::half_pi<float>() - 0.01f;
 constexpr float kSensorHeightMm = 24.0f; // 35 mm full-frame format
 
+// Rodrigues' rotation of v about the unit vector k.
+glm::vec3 rotateAbout(const glm::vec3& v, const glm::vec3& k, float angle) {
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    return v * c + glm::cross(k, v) * s + k * glm::dot(k, v) * (1.0f - c);
+}
+
 float focalToVerticalFov(float millimeters) {
     return 2.0f * std::atan(0.5f * kSensorHeightMm / millimeters);
 }
@@ -49,9 +56,41 @@ void OrbitCamera::moveToEyeLevel(float eyeHeight) {
     target_.y = eye.y - offset.y * distance_;
 }
 
+void OrbitCamera::look(float deltaYaw, float deltaPitch) {
+    const glm::vec3 eye = position();
+    yaw_ = std::remainder(yaw_ + deltaYaw, glm::two_pi<float>());
+    pitch_ = std::clamp(pitch_ + deltaPitch, -kMaxPitch, kMaxPitch);
+    const float cosPitch = std::cos(pitch_);
+    const glm::vec3 offset{cosPitch * std::cos(yaw_), cosPitch * std::sin(yaw_), std::sin(pitch_)};
+    target_ = eye - offset * distance_;
+}
+
+void OrbitCamera::walk(float forwardMeters, float rightMeters, float upMeters) {
+    // The camera looks from position() toward the target, i.e. along −offset.
+    const glm::vec3 forward{-std::cos(yaw_), -std::sin(yaw_), 0.0f};
+    const glm::vec3 right = glm::cross(forward, kUp);
+    target_ += forward * forwardMeters + right * rightMeters + kUp * upMeters;
+}
+
 void OrbitCamera::orbit(float deltaYaw, float deltaPitch) {
     yaw_ = std::remainder(yaw_ + deltaYaw, glm::two_pi<float>());
     pitch_ = std::clamp(pitch_ + deltaPitch, -kMaxPitch, kMaxPitch);
+}
+
+// The change of (yaw, pitch) is a rotation of the whole camera frame: first about the horizontal
+// axis (sin yaw, −cos yaw, 0), which raises the eye-from-target direction by the pitch change, then
+// about world Z by the yaw change. Applying that rotation to the eye around the pivot keeps the
+// pivot fixed relative to the camera.
+void OrbitCamera::orbitAround(const glm::vec3& pivot, float deltaYaw, float deltaPitch) {
+    const glm::vec3 axis{std::sin(yaw_), -std::cos(yaw_), 0.0f};
+    const float oldPitch = pitch_;
+    const glm::vec3 eye = position();
+    orbit(deltaYaw, deltaPitch);
+    const glm::vec3 relative = rotateAbout(rotateAbout(eye - pivot, axis, pitch_ - oldPitch), kUp,
+                                           deltaYaw);
+    const float cosPitch = std::cos(pitch_);
+    const glm::vec3 offset{cosPitch * std::cos(yaw_), cosPitch * std::sin(yaw_), std::sin(pitch_)};
+    target_ = pivot + relative - offset * distance_;
 }
 
 void OrbitCamera::pan(float deltaXPixels, float deltaYPixels, float viewportHeightPixels) {

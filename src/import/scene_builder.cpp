@@ -227,6 +227,7 @@ PlacedModel addToScene(Scene& scene, ImportedModel& model) {
         material.metalnessMap = sceneSlot(imported.metalness, textureIds);
         material.normalMap = sceneSlot(imported.normal, textureIds);
         material.occlusionMap = sceneSlot(imported.occlusion, textureIds);
+        material.heightMap = sceneSlot(imported.height, textureIds);
         const std::string name =
             imported.name.empty() ? std::format("Material {}", m + 1) : imported.name;
         materialIds[m] = scene.addMaterial(name, material);
@@ -326,7 +327,8 @@ ResourceId addMaterialToScene(Scene& scene, const ImportedModel& model) {
                           imported.roughness.texture == static_cast<int>(t) ||
                           imported.metalness.texture == static_cast<int>(t) ||
                           imported.normal.texture == static_cast<int>(t) ||
-                          imported.occlusion.texture == static_cast<int>(t);
+                          imported.occlusion.texture == static_cast<int>(t) ||
+                          imported.height.texture == static_cast<int>(t);
         if (used && !texture.image.empty()) {
             textureIds[t] = scene.addTexture(texture.name, texture.image, texture.sourcePath);
         }
@@ -337,6 +339,7 @@ ResourceId addMaterialToScene(Scene& scene, const ImportedModel& model) {
     material.metalnessMap = sceneSlot(imported.metalness, textureIds);
     material.normalMap = sceneSlot(imported.normal, textureIds);
     material.occlusionMap = sceneSlot(imported.occlusion, textureIds);
+    material.heightMap = sceneSlot(imported.height, textureIds);
     const std::string& name = imported.name.empty() ? model.name : imported.name;
     return scene.addMaterial(name.empty() ? "Material" : name, material);
 }

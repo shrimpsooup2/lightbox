@@ -63,7 +63,7 @@ template <class HasTexture>
 void checkTextureReferences(const Material& material, const HasTexture& hasTexture) {
     for (const TextureSlot* slot : {&material.baseColorMap, &material.roughnessMap,
                                     &material.metalnessMap, &material.normalMap,
-                                    &material.occlusionMap}) {
+                                    &material.occlusionMap, &material.heightMap}) {
         if (slot->texture && !hasTexture(slot->texture)) {
             unknownId("texture", slot->texture.value);
         }
@@ -191,7 +191,7 @@ namespace {
 bool usesTexture(const Material& m, ResourceId id) {
     return m.baseColorMap.texture == id || m.roughnessMap.texture == id ||
            m.metalnessMap.texture == id || m.normalMap.texture == id ||
-           m.occlusionMap.texture == id;
+           m.occlusionMap.texture == id || m.heightMap.texture == id;
 }
 
 } // namespace
@@ -526,6 +526,9 @@ EntityId Scene::duplicate(EntityId id) {
         if (source.meshInstance) {
             setMeshInstance(copy, source.meshInstance);
         }
+        if (source.light) {
+            setLight(copy, source.light);
+        }
         if (!rootCopy) {
             rootCopy = copy;
         }
@@ -594,6 +597,15 @@ void Scene::setMeshInstance(EntityId id, std::optional<MeshInstance> instance) {
     notify(SceneChange::Kind::MeshInstanceChanged, id);
 }
 
+void Scene::setLight(EntityId id, std::optional<Light> light) {
+    Entity& entity = require(id);
+    if (entity.light == light) {
+        return;
+    }
+    entity.light = light;
+    notify(SceneChange::Kind::LightChanged, id);
+}
+
 const Entity* Scene::entity(EntityId id) const {
     const auto it = entities_.find(id);
     return it == entities_.end() ? nullptr : &it->second;
@@ -657,6 +669,94 @@ Scene::ListenerId Scene::addListener(Listener listener) {
 
 void Scene::removeListener(ListenerId id) {
     std::erase_if(listeners_, [id](const auto& entry) { return entry.first == id; });
+}
+
+std::vector<EntityId> meshEntitiesIn(const Scene& scene, std::span<const EntityId> ids) {
+    std::vector<EntityId> result;
+    std::unordered_set<EntityId> seen;
+    for (const EntityId root : ids) {
+        std::vector<EntityId> pending{root};
+        while (!pending.empty()) {
+            const EntityId id = pending.back();
+            pending.pop_back();
+            const Entity* entity = scene.entity(id);
+            if (entity == nullptr || !seen.insert(id).second) {
+                continue;
+            }
+            if (entity->meshInstance) {
+                result.push_back(id);
+            }
+            pending.insert(pending.end(), entity->children.rbegin(), entity->children.rend());
+        }
+    }
+    return result;
+}
+
+std::size_t applyMaterial(Scene& scene, std::span<const EntityId> ids, ResourceId material) {
+    std::size_t changed = 0;
+    for (const EntityId id : meshEntitiesIn(scene, ids)) {
+        const MeshInstance current = *scene.entity(id)->meshInstance;
+        if (current.material != material) {
+            scene.setMeshInstance(id, MeshInstance{current.mesh, material});
+            ++changed;
+        }
+    }
+    return changed;
+}
+
+std::optional<Bounds> worldBoundsOf(const Scene& scene, std::span<const EntityId> ids) {
+    std::optional<Bounds> result;
+    for (const EntityId id : meshEntitiesIn(scene, ids)) {
+        const MeshResource* mesh = scene.mesh(scene.entity(id)->meshInstance->mesh);
+        if (mesh == nullptr) {
+            continue;
+        }
+        const glm::mat4 world = scene.worldMatrix(id);
+        for (int corner = 0; corner < 8; ++corner) {
+            const glm::vec3 local((corner & 1) != 0 ? mesh->bounds.max.x : mesh->bounds.min.x,
+                                  (corner & 2) != 0 ? mesh->bounds.max.y : mesh->bounds.min.y,
+                                  (corner & 4) != 0 ? mesh->bounds.max.z : mesh->bounds.min.z);
+            const glm::vec3 point(world * glm::vec4(local, 1.0f));
+            if (!result) {
+                result = Bounds{point, point};
+            } else {
+                result->min = glm::min(result->min, point);
+                result->max = glm::max(result->max, point);
+            }
+        }
+    }
+    return result;
+}
+
+void moveBy(Scene& scene, EntityId id, const glm::vec3& worldOffset) {
+    const Entity* entity = scene.entity(id);
+    if (entity == nullptr) {
+        return;
+    }
+    const glm::mat4 parentWorld =
+        entity->parent ? scene.worldMatrix(entity->parent) : glm::mat4(1.0f);
+    Transform transform = entity->transform;
+    transform.position += glm::vec3(glm::inverse(parentWorld) * glm::vec4(worldOffset, 0.0f));
+    scene.setTransform(id, transform);
+}
+
+std::vector<EntityId> outermostEntities(const Scene& scene, std::span<const EntityId> ids) {
+    const std::unordered_set<EntityId> listed(ids.begin(), ids.end());
+    std::vector<EntityId> result;
+    for (const EntityId id : ids) {
+        const Entity* entity = scene.entity(id);
+        if (entity == nullptr) {
+            continue;
+        }
+        bool inside = false;
+        for (EntityId up = entity->parent; up && !inside; up = scene.entity(up)->parent) {
+            inside = listed.contains(up);
+        }
+        if (!inside && std::find(result.begin(), result.end(), id) == result.end()) {
+            result.push_back(id);
+        }
+    }
+    return result;
 }
 
 } // namespace lb

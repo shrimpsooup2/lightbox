@@ -9,6 +9,7 @@
 
 #include <glm/common.hpp>
 
+#include "core/environment_map.hpp"
 #include "render/frame_data.hpp"
 #include "render/renderer_impl.hpp"
 
@@ -124,7 +125,8 @@ void destroyTexture(GpuContext& ctx, GpuTexture& texture) {
 
 Renderer::Impl::Impl(const RendererOptions& options)
     : context(options.enableValidation),
-      pipelines(context.device, context.bindlessTextureCapacity) {
+      pipelines(context.device, context.bindlessTextureCapacity,
+                context.nonUniformTextureIndexing, options.pipelineCache) {
     createTextureTable();
 }
 
@@ -142,13 +144,23 @@ Renderer::Impl::~Impl() {
 
 void Renderer::Impl::createTextureTable() {
     try {
-        // Mip generation blits in the image's creation format (UNORM); linear filtering there is
-        // mandatory in Vulkan, but checking keeps odd drivers working (nearest-filtered mips).
+        // Mip generation blits in the image's creation format; linear filtering there is
+        // mandatory in Vulkan for RGBA8, but checking keeps odd drivers working (nearest mips).
+        // Color maps are created as sRGB so the blit averages light, not gamma-encoded values
+        // (otherwise distant textures turn dark and muddy).
         VkFormatProperties formatProps{};
         vkGetPhysicalDeviceFormatProperties(context.physicalDevice, VK_FORMAT_R8G8B8A8_UNORM,
                                             &formatProps);
         linearBlit = (formatProps.optimalTilingFeatures &
                       VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0;
+        VkFormatProperties srgbProps{};
+        vkGetPhysicalDeviceFormatProperties(context.physicalDevice, VK_FORMAT_R8G8B8A8_SRGB,
+                                            &srgbProps);
+        srgbBlit = (srgbProps.optimalTilingFeatures &
+                    (VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+                     VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT)) ==
+                   (VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+                    VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT);
 
         // Trilinear, repeating (tiled materials), anisotropic for surfaces seen at grazing angles
         // (floors, long walls).
@@ -283,36 +295,27 @@ void Renderer::releaseMesh(MeshHandle handle) {
     impl_->freeMeshSlots.push_back(handle.index);
 }
 
-TextureHandle Renderer::uploadTexture(const ImageData& image) {
-    if (image.empty() ||
-        image.pixels.size() != std::size_t{image.width} * std::size_t{image.height} * 4) {
-        throw std::invalid_argument("uploadTexture: image needs RGBA8 pixels matching its size");
-    }
-    Impl& r = *impl_;
-    GpuContext& ctx = r.context;
-    const bool reuseSlot = !r.freeTextureSlots.empty();
-    if (!reuseSlot && r.textures.size() >= ctx.bindlessTextureCapacity) {
-        throw std::runtime_error(std::format(
-            "This model uses more textures than the graphics card can show at once ({}).",
-            ctx.bindlessTextureCapacity));
-    }
+namespace {
 
-    const std::uint32_t mipLevels =
-        static_cast<std::uint32_t>(std::bit_width(std::max(image.width, image.height)));
-
-    // One image, two interpretations: sRGB for color, UNORM for data maps.
-    const VkFormat viewFormats[] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB};
+// A mip-mapped texture from tightly packed pixels, with an sRGB-interpreting and a linear view
+// (the same format for float images). The mip chain is filtered in `format`.
+GpuTexture createTexture(GpuContext& ctx, const void* pixels, VkDeviceSize bytes,
+                         std::uint32_t width, std::uint32_t height, VkFormat format,
+                         VkFormat srgbViewFormat, VkFormat linearViewFormat, VkFilter blitFilter) {
+    const std::uint32_t mipLevels = static_cast<std::uint32_t>(std::bit_width(std::max(width, height)));
+    const bool mutableFormat = srgbViewFormat != linearViewFormat;
+    const VkFormat viewFormats[] = {linearViewFormat, srgbViewFormat};
     VkImageFormatListCreateInfo formatList{};
     formatList.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
     formatList.viewFormatCount = 2;
     formatList.pViewFormats = viewFormats;
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.pNext = &formatList;
-    imageInfo.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+    imageInfo.pNext = mutableFormat ? &formatList : nullptr;
+    imageInfo.flags = mutableFormat ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT : 0;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    imageInfo.extent = {image.width, image.height, 1};
+    imageInfo.format = format;
+    imageInfo.extent = {width, height, 1};
     imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -328,35 +331,45 @@ TextureHandle Renderer::uploadTexture(const ImageData& image) {
     try {
         LB_VK_CHECK(vmaCreateImage(ctx.allocator, &imageInfo, &allocInfo, &texture.image,
                                    &texture.allocation, nullptr));
-        const VkDeviceSize bytes = image.pixels.size();
         staging =
             ctx.createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, BufferMemory::HostWrite);
-        std::memcpy(staging.mapped, image.pixels.data(), image.pixels.size());
+        std::memcpy(staging.mapped, pixels, bytes);
         LB_VK_CHECK(vmaFlushAllocation(ctx.allocator, staging.allocation, 0, bytes));
-        const VkFilter blitFilter = r.linearBlit ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
         ctx.immediateSubmit([&](VkCommandBuffer cmd) {
-            recordTextureUpload(cmd, staging.buffer, texture.image, image.width, image.height,
-                                mipLevels, blitFilter);
+            recordTextureUpload(cmd, staging.buffer, texture.image, width, height, mipLevels,
+                                blitFilter);
         });
         ctx.destroyBuffer(staging);
-        texture.srgbView =
-            createTextureView(ctx.device, texture.image, VK_FORMAT_R8G8B8A8_SRGB, mipLevels);
+        texture.srgbView = createTextureView(ctx.device, texture.image, srgbViewFormat, mipLevels);
         texture.linearView =
-            createTextureView(ctx.device, texture.image, VK_FORMAT_R8G8B8A8_UNORM, mipLevels);
+            createTextureView(ctx.device, texture.image, linearViewFormat, mipLevels);
     } catch (...) {
         ctx.destroyBuffer(staging);
         destroyTexture(ctx, texture);
         throw;
     }
+    return texture;
+}
 
+} // namespace
+
+void Renderer::Impl::checkTextureCapacity() const {
+    if (freeTextureSlots.empty() && textures.size() >= context.bindlessTextureCapacity) {
+        throw std::runtime_error(std::format(
+            "This model uses more textures than the graphics card can show at once ({}).",
+            context.bindlessTextureCapacity));
+    }
+}
+
+TextureHandle Renderer::Impl::addTexture(const GpuTexture& texture) {
     std::uint32_t slot = 0;
-    if (reuseSlot) {
-        slot = r.freeTextureSlots.back();
-        r.freeTextureSlots.pop_back();
-        r.textures[slot] = texture;
+    if (!freeTextureSlots.empty()) {
+        slot = freeTextureSlots.back();
+        freeTextureSlots.pop_back();
+        textures[slot] = texture;
     } else {
-        slot = static_cast<std::uint32_t>(r.textures.size());
-        r.textures.push_back(texture);
+        slot = static_cast<std::uint32_t>(textures.size());
+        textures.push_back(texture);
     }
 
     // The slot is not referenced by any submitted frame (new, or released after a device wait), so
@@ -368,7 +381,7 @@ TextureHandle Renderer::uploadTexture(const ImageData& image) {
     VkWriteDescriptorSet writes[2]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = r.textureSet;
+        write.dstSet = textureSet;
         write.dstArrayElement = slot;
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
@@ -377,8 +390,40 @@ TextureHandle Renderer::uploadTexture(const ImageData& image) {
     writes[0].pImageInfo = &srgbInfo;
     writes[1].dstBinding = kLinearTexturesBinding;
     writes[1].pImageInfo = &linearInfo;
-    vkUpdateDescriptorSets(ctx.device, 2, writes, 0, nullptr);
+    vkUpdateDescriptorSets(context.device, 2, writes, 0, nullptr);
     return TextureHandle{slot};
+}
+
+TextureHandle Renderer::uploadTexture(const ImageData& image, bool color) {
+    if (image.empty() ||
+        image.pixels.size() != std::size_t{image.width} * std::size_t{image.height} * 4) {
+        throw std::invalid_argument("uploadTexture: image needs RGBA8 pixels matching its size");
+    }
+    Impl& r = *impl_;
+    r.checkTextureCapacity();
+    // One image, two interpretations: sRGB for color, UNORM for data maps. Created in the format of
+    // its main use, because the mip chain is filtered in the creation format.
+    const bool srgbImage = color && r.srgbBlit;
+    const GpuTexture texture = createTexture(
+        r.context, image.pixels.data(), image.pixels.size(), image.width, image.height,
+        srgbImage ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB,
+        VK_FORMAT_R8G8B8A8_UNORM, r.linearBlit ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+    return r.addTexture(texture);
+}
+
+TextureHandle Renderer::uploadEnvironmentMap(const EnvironmentMap& map) {
+    if (map.width == 0 || map.height == 0 ||
+        map.pixels.size() != std::size_t{map.width} * std::size_t{map.height} * 4) {
+        throw std::invalid_argument("uploadEnvironmentMap: needs RGBA16F pixels matching its size");
+    }
+    Impl& r = *impl_;
+    r.checkTextureCapacity();
+    // Linear blits of R16G16B16A16_SFLOAT are mandatory in Vulkan.
+    const GpuTexture texture = createTexture(
+        r.context, map.pixels.data(), map.pixels.size() * sizeof(std::uint16_t), map.width,
+        map.height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_FORMAT_R16G16B16A16_SFLOAT, VK_FILTER_LINEAR);
+    return r.addTexture(texture);
 }
 
 void Renderer::releaseTexture(TextureHandle handle) {
@@ -395,6 +440,11 @@ void Renderer::releaseTexture(TextureHandle handle) {
 std::unique_ptr<Presenter> Renderer::createPresenter(VkSurfaceKHR surface, std::uint32_t width,
                                                      std::uint32_t height) {
     return makePresenter(*impl_, surface, width, height);
+}
+
+std::unique_ptr<Presenter> Renderer::createOffscreenPresenter(std::uint32_t width,
+                                                              std::uint32_t height) {
+    return makePresenter(*impl_, VK_NULL_HANDLE, width, height);
 }
 
 } // namespace lb::render

@@ -37,6 +37,7 @@
 
 #include "app/background.hpp"
 #include "app/property_widgets.hpp"
+#include "app/texture_browser.hpp"
 #include "app/texture_slot.hpp"
 #include "app/theme.hpp"
 #include "app/ui_helpers.hpp"
@@ -151,6 +152,14 @@ QString imageFilter() {
     return MaterialsPanel::tr("Images (%1)").arg(patterns.join(QLatin1Char(' ')));
 }
 
+// Texture sets: loose images, or a pack downloaded from a texture site (zip).
+QString textureSetFilter() {
+    QString filter = imageFilter();
+    filter.insert(filter.size() - 1, QStringLiteral(" *.zip"));
+    return MaterialsPanel::tr("Texture images or downloaded packs") +
+           filter.mid(filter.indexOf(QLatin1Char('(')) - 1);
+}
+
 QString errorText(std::exception_ptr error) {
     try {
         std::rethrow_exception(std::move(error));
@@ -161,29 +170,6 @@ QString errorText(std::exception_ptr error) {
     }
 }
 
-// Entities with a mesh among `ids`, including everything inside groups (an imported model is
-// selected as its root group), each once, in the given then hierarchy order.
-std::vector<EntityId> meshEntitiesIn(const Scene& scene, std::span<const EntityId> ids) {
-    std::vector<EntityId> result;
-    std::unordered_set<EntityId> seen;
-    for (const EntityId root : ids) {
-        std::vector<EntityId> pending{root};
-        while (!pending.empty()) {
-            const EntityId id = pending.back();
-            pending.pop_back();
-            const Entity* entity = scene.entity(id);
-            if (entity == nullptr || !seen.insert(id).second) {
-                continue;
-            }
-            if (entity->meshInstance) {
-                result.push_back(id);
-            }
-            pending.insert(pending.end(), entity->children.rbegin(), entity->children.rend());
-        }
-    }
-    return result;
-}
-
 } // namespace
 
 MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* parent)
@@ -192,7 +178,12 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
     QVBoxLayout* layout = ui::scrollPage(this);
     QWidget* page = layout->parentWidget();
 
-    // Actions.
+    // Actions. The online library comes first: it is the quickest way to a good material.
+    library_ = new QPushButton(theme::icon(QStringLiteral("download")), tr("Texture library…"), page);
+    library_->setProperty("accent", true);
+    library_->setToolTip(tr("Browse free CC0 textures from ambientCG and Poly Haven; one click "
+                            "downloads a set and applies it at its real-world size"));
+    layout->addWidget(library_);
     auto* actions = new QGridLayout;
     actions->setSpacing(6);
     create_ = new QPushButton(theme::icon(QStringLiteral("palette")), tr("New material"), page);
@@ -317,6 +308,16 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
     normalFlipY_->setToolTip(tr("Turn on when the relief looks inverted (dents instead of "
                                 "ridges). Files named …NormalDX and Unreal/Quixel maps need it."));
     relief_->addWide(normalFlipY_);
+    heightMap_ = new TextureSlotWidget(scene_, *thumbnails_, TextureSlotWidget::Kind::Scalar,
+                                       tr("Height map"), relief_);
+    relief_->addRow(tr("Height map"), heightMap_)
+        .label->setToolTip(tr("Black-and-white image (white = high, often named Displacement or "
+                              "Height): makes joints and gaps look truly recessed, with their own "
+                              "shadows."));
+    heightDepth_ = new ui::SliderField(0.0, 0.1, 3, tr(" m"), relief_);
+    relief_->addRow(tr("Depth"), heightDepth_)
+        .label->setToolTip(tr("How deep the height map's black parts are, e.g. 0.01–0.02 m for "
+                              "brick joints, 0.05 m for cobbles. 0 = flat."));
     layout->addWidget(relief_);
 
     // Occlusion.
@@ -327,6 +328,73 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
         .label->setToolTip(tr("Ambient occlusion: darkens crevices in sky and fill light (not in "
                               "direct sun)."));
     layout->addWidget(occlusion_);
+
+    // Glass and glow.
+    glass_ = new ui::Section(tr("Glass && glow"), page);
+    auto* glassPresets = new QGridLayout;
+    glassPresets->setSpacing(4);
+    struct GlassPreset {
+        const char* name;
+        const char* tip;
+        float transmission;
+        float roughness;
+        glm::vec3 tint;
+    };
+    const GlassPreset glassPresetList[] = {
+        {QT_TR_NOOP("Clear"), QT_TR_NOOP("Window glass"), 1.0f, 0.02f, {1.0f, 1.0f, 1.0f}},
+        {QT_TR_NOOP("Frosted"), QT_TR_NOOP("Satin-etched glass, shower screens"), 1.0f, 0.35f,
+         {1.0f, 1.0f, 1.0f}},
+        {QT_TR_NOOP("Tinted"), QT_TR_NOOP("Grey solar-control glass"), 1.0f, 0.02f,
+         {0.55f, 0.6f, 0.6f}},
+        {QT_TR_NOOP("Solid"), QT_TR_NOOP("Not see-through"), 0.0f, -1.0f, {1.0f, 1.0f, 1.0f}},
+    };
+    int presetIndex = 0;
+    for (const GlassPreset& preset : glassPresetList) {
+        auto* button = new QPushButton(tr(preset.name), glass_);
+        button->setProperty("compact", true);
+        button->setToolTip(tr(preset.tip));
+        connect(button, &QPushButton::clicked, this, [this, preset] {
+            editMaterial([&](Material& m) {
+                m.transmission = preset.transmission;
+                if (preset.roughness >= 0.0f) {
+                    m.roughness = preset.roughness;
+                    m.metalness = 0.0f;
+                    m.baseColor = preset.tint;
+                    m.thinWalled = true;
+                    m.ior = 1.5f;
+                }
+            });
+        });
+        glassPresets->addWidget(button, presetIndex / 4, presetIndex % 4);
+        ++presetIndex;
+    }
+    glass_->addWide(glassPresets);
+    transmission_ = new ui::SliderField(0.0, 1.0, 2, QString(), glass_);
+    glass_->addRow(tr("See-through"), transmission_)
+        .label->setToolTip(tr("0 = solid, 1 = clear glass. The color tints the light passing "
+                              "through; roughness frosts it."));
+    ior_ = new ui::SliderField(1.0, 2.5, 2, QString(), glass_);
+    glass_->addRow(tr("Refraction"), ior_)
+        .label->setToolTip(tr("Index of refraction: glass 1.5, water 1.33, acrylic 1.49. Higher "
+                              "bends light more and reflects more."));
+    thinWalled_ = new QCheckBox(tr("Thin pane (window glass)"), glass_);
+    thinWalled_->setToolTip(tr("On for windows and glass walls modeled as single surfaces or thin "
+                               "panes: light passes straight through. Off for solid glass objects "
+                               "(vases, lenses), which bend the view behind them."));
+    glass_->addWide(thinWalled_);
+    emissionStrength_ = new ui::SliderField(0.0, 20000.0, 0, tr(" nits"), glass_);
+    glass_->addRow(tr("Glow"), emissionStrength_)
+        .label->setToolTip(tr("Makes the surface emit light (lamp shades, LED strips, screens), "
+                              "in nits: a screen 300, a frosted bulb 50 000. 0 = off."));
+    glowSwatch_ = new QToolButton(glass_);
+    glowSwatch_->setIconSize(QSize(48, 20));
+    glowSwatch_->setCursor(Qt::PointingHandCursor);
+    glowSwatch_->setToolTip(tr("Click to change the glow color"));
+    auto* glowRow = new QHBoxLayout;
+    glowRow->addWidget(glowSwatch_);
+    glowRow->addStretch();
+    glass_->addRow(tr("Glow color"), glowRow);
+    layout->addWidget(glass_);
 
     // Mapping.
     mapping_ = new ui::Section(tr("Mapping"), page);
@@ -345,9 +413,40 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
     QHBoxLayout* scaleRow = axisPair(scaleX_, scaleY_, mapping_);
     scaleRow->addWidget(lockAspect_);
     scaleLabel_ = mapping_->addRow(tr("Tile size"), scaleRow).label;
+    // One click for common sizes; keeps the tile's proportions.
+    auto* quick = new QHBoxLayout;
+    quick->setSpacing(4);
+    for (const double meters : {0.5, 1.0, 2.0, 3.0, 5.0}) {
+        // Numbers only, so the row stays narrow; the row label says "m".
+        auto* button = new QPushButton(QLocale().toString(meters), mapping_);
+        button->setProperty("compact", true);
+        button->setMinimumWidth(0);
+        button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        button->setToolTip(tr("One texture tile covers %1 m").arg(QLocale().toString(meters)));
+        connect(button, &QPushButton::clicked, this, [this, meters] {
+            editMaterial([meters](Material& m) {
+                const float aspect = m.textureScale.x > 0.0f ? m.textureScale.y / m.textureScale.x
+                                                             : 1.0f;
+                m.textureScale = glm::vec2(static_cast<float>(meters),
+                                           static_cast<float>(meters) * aspect);
+            });
+        });
+        quick->addWidget(button);
+    }
+    quickSizes_ = mapping_->addRow(tr("Quick size (m)"), quick);
     rotation_ = new ui::SliderField(0.0, 360.0, 0, QStringLiteral("°"), mapping_);
     mapping_->addRow(tr("Rotation"), rotation_)
         .label->setToolTip(tr("Turns the pattern, e.g. to run planks or tiles the other way."));
+    variation_ = new ui::SliderField(0.0, 1.0, 2, QString(), mapping_);
+    mapping_->addRow(tr("Variation"), variation_)
+        .label->setToolTip(tr("Gentle changes in brightness across many tiles, so the texture "
+                              "doesn't look like a repeating grid from a distance."));
+    randomTiles_ = new QCheckBox(tr("Rotate each tile randomly"), mapping_);
+    randomTiles_->setToolTip(tr("Turns and shifts every tile at random, blended softly at the "
+                                "tile borders, so no repeat shows. Good for stone, concrete, "
+                                "plaster, ground and grass; leave it off for bricks, planks and "
+                                "anything with straight joints."));
+    mapping_->addWide(randomTiles_);
     offsetX_ = ui::valueField(-1000.0, 1000.0, 2, QString(), mapping_);
     offsetY_ = ui::valueField(-1000.0, 1000.0, 2, QString(), mapping_);
     mapping_->addRow(tr("Offset"), axisPair(offsetX_, offsetY_, mapping_))
@@ -374,6 +473,7 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
 
     connect(create_, &QPushButton::clicked, this, &MaterialsPanel::createMaterial);
     connect(fromTextures_, &QPushButton::clicked, this, &MaterialsPanel::createFromTextures);
+    connect(library_, &QPushButton::clicked, this, &MaterialsPanel::openTextureLibrary);
     connect(apply_, &QPushButton::clicked, this, &MaterialsPanel::applyToSelection);
     connect(selectUsers_, &QPushButton::clicked, this, &MaterialsPanel::selectUsers);
     connect(delete_, &QPushButton::clicked, this, &MaterialsPanel::deleteMaterial);
@@ -384,10 +484,33 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
     });
     connect(name_, &QLineEdit::editingFinished, this, &MaterialsPanel::applyName);
     connect(swatch_, &QToolButton::clicked, this, &MaterialsPanel::pickColor);
+    connect(transmission_, &ui::SliderField::valueEdited, this, [this](double value) {
+        editMaterial([value](Material& m) { m.transmission = static_cast<float>(value); });
+    });
+    connect(ior_, &ui::SliderField::valueEdited, this, [this](double value) {
+        editMaterial([value](Material& m) { m.ior = static_cast<float>(value); });
+    });
+    connect(thinWalled_, &QCheckBox::clicked, this, [this](bool checked) {
+        editMaterial([checked](Material& m) { m.thinWalled = checked; });
+    });
+    connect(emissionStrength_, &ui::SliderField::valueEdited, this, [this](double value) {
+        editMaterial([value](Material& m) { m.emissionStrength = static_cast<float>(value); });
+    });
+    connect(glowSwatch_, &QToolButton::clicked, this, [this] {
+        const MaterialResource* resource = scene_.material(current_);
+        if (resource == nullptr) {
+            return;
+        }
+        const QColor chosen = QColorDialog::getColor(
+            ui::displayColor(resource->material.emissionColor), this, tr("Glow color"));
+        if (chosen.isValid()) {
+            editMaterial([&](Material& m) { m.emissionColor = ui::linearColor(chosen); });
+        }
+    });
     const std::pair<TextureSlotWidget*, TextureSlot Material::*> maps[] = {
         {baseColorMap_, &Material::baseColorMap}, {roughnessMap_, &Material::roughnessMap},
         {metalnessMap_, &Material::metalnessMap}, {normalMap_, &Material::normalMap},
-        {occlusionMap_, &Material::occlusionMap},
+        {occlusionMap_, &Material::occlusionMap}, {heightMap_, &Material::heightMap},
     };
     for (const auto& [widget, map] : maps) {
         connect(widget, &TextureSlotWidget::slotEdited, this,
@@ -405,6 +528,9 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
     connect(normalFlipY_, &QCheckBox::clicked, this, [this](bool checked) {
         editMaterial([checked](Material& m) { m.normalFlipY = checked; });
     });
+    connect(heightDepth_, &ui::SliderField::valueEdited, this, [this](double value) {
+        editMaterial([value](Material& m) { m.heightDepth = static_cast<float>(value); });
+    });
     connect(mappingMode_, &ui::SegmentedControl::currentEdited, this, [this](int index) {
         editMaterial([index](Material& m) {
             m.mapping = index == 1 ? TextureMapping::Box : TextureMapping::UV;
@@ -417,6 +543,12 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
     connect(rotation_, &ui::SliderField::valueEdited, this, [this](double value) {
         editMaterial(
             [value](Material& m) { m.textureRotationDegrees = static_cast<float>(value); });
+    });
+    connect(variation_, &ui::SliderField::valueEdited, this, [this](double value) {
+        editMaterial([value](Material& m) { m.variation = static_cast<float>(value); });
+    });
+    connect(randomTiles_, &QCheckBox::clicked, this, [this](bool checked) {
+        editMaterial([checked](Material& m) { m.randomTileRotation = checked; });
     });
     connect(offsetX_, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         editMaterial([value](Material& m) { m.textureOffset.x = static_cast<float>(value); });
@@ -675,14 +807,14 @@ void MaterialsPanel::showMaterial(ResourceId id) {
     if (current_ != shown_) {
         // An image still decoding for the previous material must not land on this one.
         for (TextureSlotWidget* map :
-             {baseColorMap_, roughnessMap_, metalnessMap_, normalMap_, occlusionMap_}) {
+             {baseColorMap_, roughnessMap_, metalnessMap_, normalMap_, occlusionMap_, heightMap_}) {
             map->cancelLoading();
         }
         shown_ = current_;
     }
     for (QWidget* section : {static_cast<QWidget*>(base_), static_cast<QWidget*>(surface_),
                              static_cast<QWidget*>(relief_), static_cast<QWidget*>(occlusion_),
-                             static_cast<QWidget*>(mapping_)}) {
+                             static_cast<QWidget*>(glass_), static_cast<QWidget*>(mapping_)}) {
         section->setVisible(resource != nullptr);
     }
     noMaterial_->setVisible(resource == nullptr);
@@ -708,6 +840,13 @@ void MaterialsPanel::showMaterial(ResourceId id) {
     normalStrength_->setValue(m.normalStrength);
     normalFlipY_->setChecked(m.normalFlipY);
     occlusionMap_->setSlot(m.occlusionMap);
+    heightMap_->setSlot(m.heightMap);
+    heightDepth_->setValue(static_cast<double>(m.heightDepth));
+    transmission_->setValue(static_cast<double>(m.transmission));
+    ior_->setValue(static_cast<double>(m.ior));
+    thinWalled_->setChecked(m.thinWalled);
+    emissionStrength_->setValue(static_cast<double>(m.emissionStrength));
+    glowSwatch_->setIcon(ui::colorSwatch(ui::displayColor(m.emissionColor), QSize(48, 20)));
     showMapping(m);
     updateActions();
 }
@@ -722,6 +861,7 @@ void MaterialsPanel::showMapping(const Material& m) {
         }
     }
     scaleLabel_->setText(box ? tr("Tile size") : tr("Repeat"));
+    quickSizes_.setVisible(box);
     scaleLabel_->setToolTip(box ? tr("Real-world size of one texture tile, e.g. 0.6 m for a "
                                      "paving slab photo.")
                                 : tr("How often the texture repeats per unit of the model's "
@@ -729,6 +869,8 @@ void MaterialsPanel::showMapping(const Material& m) {
     setField(scaleX_, static_cast<double>(m.textureScale.x));
     setField(scaleY_, static_cast<double>(m.textureScale.y));
     rotation_->setValue(static_cast<double>(m.textureRotationDegrees));
+    variation_->setValue(static_cast<double>(m.variation));
+    randomTiles_->setChecked(m.randomTileRotation);
     setField(offsetX_, static_cast<double>(m.textureOffset.x));
     setField(offsetY_, static_cast<double>(m.textureOffset.y));
 }
@@ -855,10 +997,7 @@ void MaterialsPanel::applyToSelection() {
     if (!current_) {
         return;
     }
-    for (const EntityId id : meshEntitiesIn(scene_, selection_.ids())) {
-        const Entity* entity = scene_.entity(id);
-        scene_.setMeshInstance(id, MeshInstance{entity->meshInstance->mesh, current_});
-    }
+    applyMaterial(scene_, selection_.ids(), current_);
 }
 
 void MaterialsPanel::createMaterial() {
@@ -883,16 +1022,22 @@ void MaterialsPanel::createFromTextures() {
     }
     static QString lastDirectory;
     const QStringList files = QFileDialog::getOpenFileNames(
-        this, tr("Choose the images of a texture set"), lastDirectory, imageFilter());
+        this, tr("Choose the images of a texture set, or a downloaded pack (.zip)"), lastDirectory,
+        textureSetFilter());
     if (files.isEmpty()) {
         return;
     }
     lastDirectory = QFileInfo(files.first()).absolutePath();
     notice_->hide();
 
+    // A pack (zip) is one material by itself; loose images together make one material.
     std::vector<std::filesystem::path> paths;
-    paths.reserve(static_cast<std::size_t>(files.size()));
     for (const QString& file : files) {
+        const bool zip = file.endsWith(QLatin1String(".zip"), Qt::CaseInsensitive);
+        if (zip) {
+            paths.assign(1, std::filesystem::path(file.toStdWString()));
+            break;
+        }
         paths.emplace_back(file.toStdWString());
     }
     auto cancel = std::make_shared<std::atomic<bool>>(false);
@@ -953,6 +1098,24 @@ void MaterialsPanel::createFromTextures() {
                                      errorText(std::current_exception()));
             }
         });
+}
+
+void MaterialsPanel::openTextureLibrary() {
+    if (!browser_) {
+        browser_ = new TextureBrowser(scene_, selection_, window());
+        browser_->setAttribute(Qt::WA_DeleteOnClose);
+        connect(browser_, &TextureBrowser::materialAdded, this,
+                [this](ResourceId material, const QString& message) {
+                    current_ = material;
+                    flush();
+                    notice_->setText(message);
+                    notice_->setToolTip(message);
+                    notice_->show();
+                });
+    }
+    browser_->show();
+    browser_->raise();
+    browser_->activateWindow();
 }
 
 void MaterialsPanel::setImporting(bool importing) {

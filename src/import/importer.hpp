@@ -61,6 +61,7 @@ struct ImportedMaterial {
     ImportedTextureSlot metalness;
     ImportedTextureSlot normal;
     ImportedTextureSlot occlusion;
+    ImportedTextureSlot height;
 };
 
 // One material per mesh: multi-material source meshes are split per material.
@@ -82,13 +83,14 @@ struct ImportedNode {
 struct ImportedModel {
     std::string name; // file name without extension
     std::string sourcePath;
-    std::string format; // "glTF", "OBJ", "FBX"
+    std::string format; // "glTF", "OBJ", "FBX", "Collada", "KMZ (Collada)", "3DS", "STL", "PLY"
     std::vector<ImportedNode> nodes; // parents before children
     std::vector<ImportedMesh> meshes;
     std::vector<ImportedMaterial> materials;
     std::vector<ImportedTexture> textures;
     double metersPerUnit = 1.0;
     bool unitsFromFile = false; // false = guessed from the model size
+    bool axesFromFile = true;   // false: the format doesn't say which way is up (OBJ)
     std::vector<std::string> warnings; // user-presentable, e.g. "Texture wood.jpg not found"
 };
 
@@ -96,7 +98,8 @@ struct ImportedModel {
 // Called on the importing thread.
 using Progress = std::function<void(float fraction, std::string_view stage)>;
 
-// Model formats importModel() accepts, lower case with the dot (".gltf", ".glb", ".obj", ".fbx").
+// Model formats importModel() accepts, lower case with the dot (".gltf", ".glb", ".obj", ".fbx",
+// ".dae", ".kmz", ".3ds", ".stl", ".ply").
 std::span<const std::string_view> modelFileExtensions();
 bool isModelFile(const std::filesystem::path& path);
 
@@ -131,22 +134,38 @@ PlacedModel addToScene(Scene& scene, ImportedModel& model);
 // --- Texture sets (Poly Haven, ambientCG, Quixel style PBR folders) ---------------------------------
 
 enum class MapKind { BaseColor, Normal, NormalDirectX, Roughness, Gloss, Metalness, Occlusion, Height,
-                     PackedOcclusionRoughnessMetalness, Unknown };
+                     PackedOcclusionRoughnessMetalness,
+                     Specular, // specular-workflow reflection map (Poliigon REFL): not used
+                     Opacity,  // cut-out mask: not supported yet
+                     Other,    // a known map LightBox doesn't use (SSS, transmission, sheen, ID…)
+                     Unknown };
 
 // Classifies an image file by name tokens: "albedo|basecolor|diffuse|color|col|diff" → BaseColor,
 // "normal|nor|nrm|norm" (+ "dx|directx" → NormalDirectX), "roughness|rough|rgh", "gloss|glossiness",
 // "metal|metallic|metalness", "ao|occlusion|ambientocclusion", "height|disp|displacement|bump",
-// "arm|orm" → PackedOcclusionRoughnessMetalness (R = occlusion, G = roughness, B = metalness).
-// The last recognized token wins ("metal_plate_diff_1k" is a base color map).
+// "arm|orm" → PackedOcclusionRoughnessMetalness (R = occlusion, G = roughness, B = metalness),
+// "refl|reflection|specular|spec" → Specular, "opacity|alpha|alphamasked|mask" → Opacity.
+// Bit-depth suffixes are ignored ("NRM16", "DISP16"). The last recognized token wins
+// ("metal_plate_diff_1k" is a base color map), except Poliigon's trailing workflow marker:
+// in "Bricks001_COL_8K_METALNESS" the map is COL, because METALNESS follows the resolution.
 MapKind classifyTextureFile(const std::filesystem::path& path);
+
+// Tile size (meters) of texture sets whose real-world size is unknown (local files, zips).
+constexpr float kDefaultTextureTileMeters = 2.0f;
+
+// True for what importTextureSet accepts as one source: an image file, a .zip archive, or a folder.
+bool isTextureSource(const std::filesystem::path& path);
 
 // Material name shared by a set: the common file-name prefix without trailing separators/tokens
 // ("Bricks076C_1K-PNG_Color.png" + "…_Roughness.png" → "Bricks076C").
 std::string textureSetName(std::span<const std::filesystem::path> files);
 
-// Loads a set of image files as one material. Files without a recognized map token (previews) and
-// height maps are ignored with a warning; with both OpenGL and DirectX normal maps the OpenGL one is
-// used; a gloss map is used (inverted) only without a roughness map; a packed ARM/ORM map fills the
+// Loads a set of textures as one material. Each source may be an image file, a folder (its images,
+// including subfolders) or a .zip archive (its images, read without unpacking), so downloads from
+// ambientCG, Poly Haven or Poliigon can be dropped as they are. Files without a recognized map token
+// (previews), height, specular, opacity and other unused maps are ignored with a warning; with both
+// OpenGL and DirectX normal maps the OpenGL one is used; a gloss map is used (inverted) only without
+// a roughness map; a packed ARM/ORM map fills the
 // occlusion/roughness/metalness slots that no separate map provides.
 // Thread-safe (worker thread). The result has no meshes or nodes: add it with addMaterialToScene().
 // Throws ImportError if no file is a usable image.
@@ -155,7 +174,8 @@ ImportedModel importTextureSet(std::span<const std::filesystem::path> files,
                                const std::atomic<bool>* cancel = nullptr);
 
 // Adds the textures and the first material of `model` (from importTextureSet) to the scene.
-// Box mapping with a 1 m tile is used, because a texture set has no UVs of its own.
+// Box mapping with a kDefaultTextureTileMeters tile is used, because a texture set has no UVs of its
+// own; callers that know the real size (online libraries) set the material's textureScale first.
 ResourceId addMaterialToScene(Scene& scene, const ImportedModel& model);
 
 } // namespace lb::import

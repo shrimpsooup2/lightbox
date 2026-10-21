@@ -1,6 +1,8 @@
 #pragma once
 
 #include <glm/vec3.hpp>
+#include <string>
+
 
 namespace lb {
 
@@ -49,6 +51,10 @@ struct Sun {
 
 struct Sky {
     float intensity = 1.0f; // brightness of the sky dome and its fill light
+    // Sky image (HDRI): absolute path of an equirectangular .hdr panorama; empty = procedural sky.
+    // With an image, the sun comes from it (direction, color, strength; see EnvironmentMap).
+    std::string image;
+    float imageRotationDegrees = 0.0f; // turns the image (and its sun) clockwise seen from above
 
     bool operator==(const Sky&) const = default;
 };

@@ -77,6 +77,7 @@ private:
         JobKind kind = JobKind::Model;
         QStringList paths; // one model, or every image of a texture set
         bool switchMode = true;
+        std::optional<glm::vec2> dropPoint; // models: where on the ground they were dropped
     };
     // A model imported this session. Resource lists hold what the import created, so Remove can
     // delete exactly that (minus anything the user has since reused elsewhere).
@@ -111,7 +112,6 @@ private:
     Record* selectedRecord();
     void refreshList();
     void refreshDetails();
-    std::optional<Bounds> modelBounds(EntityId root) const;
     void setUnits(double metersPerUnit);
     void setYUp(bool yUp);
     void frameSelected();

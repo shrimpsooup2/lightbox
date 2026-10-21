@@ -8,6 +8,17 @@
 #include <string>
 #include <vector>
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+#pragma GCC diagnostic ignored "-Wuseless-cast"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+#include <miniz.h>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 #include "core/scene/scene.hpp"
 #include "import/importer.hpp"
 
@@ -16,6 +27,18 @@ using import::MapKind;
 namespace fs = std::filesystem;
 
 namespace {
+
+// A 2×2 uncompressed 32-bit TGA, mid grey.
+std::vector<std::uint8_t> tgaBytes() {
+    std::vector<std::uint8_t> tga(18, 0);
+    tga[2] = 2;
+    tga[12] = 2;
+    tga[14] = 2;
+    tga[16] = 32;
+    tga[17] = 0x28;
+    tga.resize(18 + 2 * 2 * 4, 128);
+    return tga;
+}
 
 // A unique scratch folder under the system temp directory with 2×2 TGA files, removed afterwards.
 class TextureDir {
@@ -33,14 +56,10 @@ public:
     TextureDir(const TextureDir&) = delete;
     TextureDir& operator=(const TextureDir&) = delete;
 
+    const fs::path& path() const { return path_; }
+
     std::vector<fs::path> write(const std::vector<std::string>& names) const {
-        std::vector<std::uint8_t> tga(18, 0);
-        tga[2] = 2;
-        tga[12] = 2;
-        tga[14] = 2;
-        tga[16] = 32;
-        tga[17] = 0x28;
-        tga.resize(18 + 2 * 2 * 4, 128);
+        const std::vector<std::uint8_t> tga = tgaBytes();
         std::vector<fs::path> files;
         for (const std::string& name : names) {
             files.push_back(path_ / name);
@@ -90,6 +109,24 @@ TEST_CASE("classifyTextureFile recognizes map names") {
         {"Concrete AO.png", MapKind::Occlusion},
         {"rock-normal-directx.png", MapKind::NormalDirectX},
         {"MyTexture.png", MapKind::Unknown},
+        // Poliigon, older names: the trailing workflow marker is not a metalness map.
+        {"BricksRuralWorn001_COL_8K_METALNESS.jpg", MapKind::BaseColor},
+        {"BricksRuralWorn001_NRM_8K_METALNESS.png", MapKind::Normal},
+        {"BricksRuralWorn001_NRM16_8K_METALNESS.tif", MapKind::Normal},
+        {"BricksRuralWorn001_METALNESS_8K_METALNESS.jpg", MapKind::Metalness},
+        {"WoodFine001_GLOSS_3K_SPECULAR.jpg", MapKind::Gloss},
+        {"WoodFine001_REFL_3K_SPECULAR.jpg", MapKind::Specular},
+        {"BricksRuralWorn001_DISP16_8K_METALNESS.tif", MapKind::Height},
+        {"WoodFine001_COL_VAR1_3K.jpg", MapKind::BaseColor},
+        // Poliigon, current names.
+        {"Poliigon_BrickReclaimedCommon_8442_BaseColor.jpg", MapKind::BaseColor},
+        {"Poliigon_BrickReclaimedCommon_8442_ORM.jpg", MapKind::PackedOcclusionRoughnessMetalness},
+        {"Poliigon_SheerFabricDrapery_6565_BaseColorOpacity.png", MapKind::BaseColor},
+        {"Poliigon_SheerFabricDrapery_6565_SheenColor.jpg", MapKind::Other},
+        {"Poliigon_SheerFabricDrapery_6565_Opacity.jpg", MapKind::Opacity},
+        // ambientCG puts the map name after the resolution, even for metals.
+        {"Metal032_1K-JPG_Metalness.jpg", MapKind::Metalness},
+        {"Metal032_1K-JPG_Color.jpg", MapKind::BaseColor},
     };
     for (const auto& c : cases) {
         INFO(c.file);
@@ -131,7 +168,7 @@ TEST_CASE("importTextureSet builds one box-mapped material (ambientCG layout)") 
     const import::ImportedMaterial& material = model.materials[0];
     CHECK(material.name == "Bricks076C");
     CHECK(material.material.mapping == TextureMapping::Box);
-    CHECK(material.material.textureScale == glm::vec2(1.0f));
+    CHECK(material.material.textureScale == glm::vec2(import::kDefaultTextureTileMeters));
     CHECK(textureName(model, material.baseColor.texture) == "Bricks076C_1K-PNG_Color.tga");
     CHECK(textureName(model, material.normal.texture) == "Bricks076C_1K-PNG_NormalGL.tga");
     CHECK_FALSE(material.material.normalFlipY);
@@ -140,8 +177,10 @@ TEST_CASE("importTextureSet builds one box-mapped material (ambientCG layout)") 
     CHECK(textureName(model, material.occlusion.texture) ==
           "Bricks076C_1K-PNG_AmbientOcclusion.tga");
     CHECK(material.metalness.texture == -1);
-    CHECK(model.textures.size() == 4); // DX normal, height map and preview are not loaded
-    CHECK(model.warnings.size() == 2); // preview + displacement
+    CHECK(model.textures.size() == 5); // DX normal and preview are not loaded
+    CHECK(model.warnings.size() == 1); // preview
+    CHECK(textureName(model, material.height.texture) == "Bricks076C_1K-PNG_Displacement.tga");
+    CHECK(material.material.heightDepth > 0.0f);
 
     Scene scene;
     const ResourceId id = import::addMaterialToScene(scene, model);
@@ -174,7 +213,8 @@ TEST_CASE("importTextureSet uses packed ARM maps, DirectX normals and gloss") {
         CHECK(material.metalness.channel == 2);
         CHECK(material.material.roughness == doctest::Approx(1.0f));
         CHECK(material.material.metalness == doctest::Approx(1.0f));
-        CHECK(model.textures.size() == 3);
+        CHECK(model.textures.size() == 4); // diff, DX normal, ARM, displacement
+        CHECK(material.height.texture >= 0);
 
         Scene scene;
         const ResourceId id = import::addMaterialToScene(scene, model);
@@ -201,4 +241,76 @@ TEST_CASE("importTextureSet reports unusable sets and cancellation") {
     std::atomic<bool> cancel{true};
     CHECK_THROWS_AS((void)import::importTextureSet(dir.write({"Wood_Color.tga"}), {}, &cancel),
                     import::ImportCancelled);
+}
+
+TEST_CASE("importTextureSet reads downloaded packs: zip archives and folders") {
+    const TextureDir dir;
+    const std::vector<std::uint8_t> tga = tgaBytes();
+
+    SUBCASE("Poliigon zip with a subfolder, extra files and a preview") {
+        const fs::path zip = dir.path() / "BricksRuralWorn001.zip";
+        const auto add = [&](const char* name, const void* data, std::size_t size) {
+            REQUIRE(mz_zip_add_mem_to_archive_file_in_place(zip.string().c_str(), name, data, size,
+                                                            nullptr, 0, MZ_BEST_SPEED));
+        };
+        for (const char* name : {"BricksRuralWorn001/BricksRuralWorn001_COL_2K_METALNESS.tga",
+                                 "BricksRuralWorn001/BricksRuralWorn001_NRM_2K_METALNESS.tga",
+                                 "BricksRuralWorn001/BricksRuralWorn001_ROUGHNESS_2K_METALNESS.tga",
+                                 "BricksRuralWorn001/BricksRuralWorn001_DISP16_2K_METALNESS.tga",
+                                 "BricksRuralWorn001/BricksRuralWorn001_Sphere.tga"}) {
+            add(name, tga.data(), tga.size());
+        }
+        const std::string readme = "Thanks for downloading";
+        add("BricksRuralWorn001/readme.txt", readme.data(), readme.size());
+
+        CHECK(import::isTextureSource(zip));
+        const import::ImportedModel model = import::importTextureSet(std::vector<fs::path>{zip});
+        REQUIRE(model.materials.size() == 1);
+        const import::ImportedMaterial& material = model.materials[0];
+        CHECK(model.name == "BricksRuralWorn001");
+        CHECK(textureName(model, material.baseColor.texture) ==
+              "BricksRuralWorn001_COL_2K_METALNESS.tga");
+        CHECK(textureName(model, material.normal.texture) ==
+              "BricksRuralWorn001_NRM_2K_METALNESS.tga");
+        CHECK_FALSE(material.material.normalFlipY); // Poliigon normals are OpenGL
+        CHECK(textureName(model, material.roughness.texture) ==
+              "BricksRuralWorn001_ROUGHNESS_2K_METALNESS.tga");
+        CHECK(material.metalness.texture == -1); // METALNESS is only the workflow marker here
+        CHECK(model.textures.size() == 4); // DISP16 is the height map
+        CHECK(model.warnings.size() == 1); // preview; readme.txt silently skipped
+
+        Scene scene;
+        const ResourceId id = import::addMaterialToScene(scene, model);
+        REQUIRE(scene.material(id) != nullptr);
+        CHECK(scene.texture(scene.material(id)->material.baseColorMap.texture)->image.width == 2);
+    }
+
+    SUBCASE("folder with nested images") {
+        const fs::path folder = dir.path() / "Wood049_2K-JPG";
+        fs::create_directories(folder / "maps");
+        for (const char* name : {"maps/Wood049_2K-JPG_Color.tga", "maps/Wood049_2K-JPG_NormalGL.tga",
+                                 "Wood049_2K-JPG_Roughness.tga"}) {
+            std::ofstream(folder / name, std::ios::binary)
+                .write(reinterpret_cast<const char*>(tga.data()),
+                       static_cast<std::streamsize>(tga.size()));
+        }
+        std::ofstream(folder / "Wood049.mtlx") << "<materialx/>";
+
+        CHECK(import::isTextureSource(folder));
+        const import::ImportedModel model =
+            import::importTextureSet(std::vector<fs::path>{folder});
+        REQUIRE(model.materials.size() == 1);
+        CHECK(model.name == "Wood049");
+        CHECK(model.materials[0].baseColor.texture >= 0);
+        CHECK(model.materials[0].normal.texture >= 0);
+        CHECK(model.materials[0].roughness.texture >= 0);
+        CHECK(model.warnings.empty());
+    }
+
+    SUBCASE("a damaged zip is reported") {
+        const fs::path zip = dir.path() / "broken.zip";
+        std::ofstream(zip, std::ios::binary) << "not a zip at all";
+        CHECK_THROWS_AS((void)import::importTextureSet(std::vector<fs::path>{zip}),
+                        import::ImportError);
+    }
 }

@@ -2,12 +2,23 @@
 
 ## Current position
 
-- **Stage:** 0 (0.6–0.8 open) and 1 (import) in progress; owner-directed UI, lighting and import work done.
-- **Done:** 0.1–0.5, 1.1, 1.3, 2.1a, 2.2; partial: 1.2, 1.4 (FBX), 1.9, 2.3, 2.8, 3.1, 3.3; interim
-  lighting/look/camera pulled forward from 2.4, 3.2, 3.4, 3.5 (D-020)
-- **Next substage (owner's choice):** **start screen with projects**, which needs **0.6 project file**
-  (save/load `.lbox`) first: build them together (start screen = the recents/templates/sample part of 2.10).
-  Then 0.7 commands/undo.
+- **Stage:** 0 (0.7–0.8 open, 0.6 mostly done) and 1 (import) in progress.
+- **Done:** 0.1–0.5, 1.1, 1.3, 2.1a, 2.2, 3.8a; partial: 0.6 (no project-file tests yet), 1.2, 1.4 (FBX,
+  Collada/KMZ, 3DS, STL, PLY; real-export checks open), 1.9, 1.10 (online textures), 2.3, 2.4 (walk,
+  orbit modes, lens), 2.5 (click select, move/rotate/scale gizmo; no undo yet), 2.8, 2.10 (start
+  screen), 3.1, 3.2a (HDR + composite, AgX, auto exposure), 3.3 (glass, emission), 3.4 (lights, sky
+  images), 3.8d (lights, emission, sky image sampling); interim lighting/look/camera (D-020)
+- **Renderer focus (owner):** photoreal quality like `render quality standard.png` (repo root; delete it
+  once reached). The owner judged the first ray-traced glTF test "not even close to photoreal"; the
+  reference replica (`.lightbox-tools/pavilion.cpp`, see the latest entry) is the benchmark scene now.
+  Next for quality: denoiser (3.8c), path tracer speed (wavefront kernels), cut-out opacity for leaves,
+  a dedicated render screen (3.12). The owner said not to work on environment/nature for now.
+- **Owner backlog, in the owner's words:** "better viewport scaling" (not yet pinned down: zoom
+  toward the cursor? model size?), then the UI problems the owner deferred ("can focus on ui problems
+  later"): the Materials panel scrolls sideways when a material is selected (its editor is wider than
+  the default dock), the start screen logo has a dark box behind it. Also open: project-file tests
+  (0.6), undo for gizmo/inspector edits (0.7), bounced light/AO for a "rendered" look (3.6), Rhino/
+  SketchUp/IFC (1.5–1.6).
 - **Known gaps carried forward:** Vulkan validation run (moved to 0.8 CI), MSVC and Linux presets not yet
   built anywhere (0.8 CI).
 
@@ -24,6 +35,118 @@ Newest entry first. Keep it short and factual:
 ```
 
 ## Session log
+
+### 2026-10-21 · Claude (omp) · Renderer: lights, glass, HDR, path tracer (3.8a), sky images (D-027, D-028)
+
+- **Did:**
+  - **Scale gizmo** handles (per axis and uniform, Shift snaps 10 %).
+  - **HDR pipeline (3.2a):** raster renders into RGBA16F; `composite.frag` applies the look (new **AgX**
+    tone mapping, **auto exposure** via `exposure.comp`) into the swapchain; overlays draw afterwards.
+  - **Lights:** `Light` (bulb/spot/panel; lumens, Kelvin, size, beam) on entities, saved in projects;
+    Light ▸ Lights adds them at the view focus; clickable icons and the gizmo in Import/Build/Light
+    modes (not in Render mode). Raster: unshadowed; path tracer: next-event estimation + MIS.
+  - **Glass and emission** in the material model (Materials ▸ Glass & glow; presets Clear/Frosted/
+    Tinted/Solid); sorted transparent raster pass; glTF see-through materials (alpha blend,
+    KHR_materials_transmission/ior/volume) import as glass.
+  - **Path tracer (3.8a, D-027):** binned-SAH BVH (`core/bvh.*`) built off the UI thread, stackless
+    traversal, `pathtrace.comp` sharing `material.glsl` with the raster shader (parallax relief on
+    camera/mirror hits), thin and solid glass, sun/sky/light sampling, Russian roulette, time budget
+    from GPU timestamps (Gentle/Balanced/Fast), quality presets (Draft/Good/Final/Ultra), async pipeline
+    compile + `pipeline-cache.bin`. Fixed `VK_ERROR_DEVICE_LOST` (texture set not visible to compute).
+  - **Progress bar and time left** for ray tracing (Render panel and status bar; "Refining: 39 of 256
+    samples · 1:09 · about 6:24 left" finished at 7:35).
+  - **Sky images (D-028):** `.hdr` panoramas in Light ▸ Sky (or dropped on the viewport), turnable; the
+    sun is extracted from the image and drives both engines' sun; importance-sampled sky light in the
+    path tracer; blurred-mip sky light and reflections in the raster view; loaded on a worker thread.
+  - **Exposure-relative firefly clamp** in the path tracer (dusk scenes were left full of speckles).
+  - **Render screen (3.12, D-029):** File ▸ Render Image… (Ctrl+Shift+R) / Render ▸ Render image…;
+    offscreen presenter (`Renderer::createOffscreenPresenter`), sizes View/HD/Full HD/4K, quality,
+    speed, live preview, progress and time left, Save image, Back/Esc. Made after a replica render in
+    the viewport stalled at 40 samples in 65 min while the window was covered.
+  - Test scenes (throwaway, `.lightbox-tools`): the owner's `modern_house.glb` (1.19 M triangles;
+    owner: "not even close to photoreal"; the model itself is low-detail) and `pavilion.cpp`, a replica
+    of the reference image built from boxes with CC0 ambientCG textures (WoodSiding008, Concrete031,
+    Wood066, WoodFloor051, Grass004) and Poly Haven's `industrial_sunset_puresky` (CC0).
+- **Verified:** warning-free `local-mingw-debug` build; 86 test cases pass (new: BVH, ray scene
+  traversal, gizmo scale, glTF glass import, sky image directions/sun extraction/sampling/broken pixels,
+  project round trip of lights, glass, emission, sky image, look). Screenshots: modern house raster vs.
+  256-sample ray traced; pavilion replica raster and ray traced (256 samples in 2:19).
+- **Decisions:** D-027 (implementation notes added), D-028, D-029.
+- **Open issues / next:** path tracer speed (~1 M pixel-samples/s on Iris Xe; wavefront split),
+  denoiser (3.8c), cut-out opacity (leaves render as solid cards), raster grid shows through ground
+  meshes at z ≈ 0, sky image brightness is uncalibrated (dusk needs *Sky light* ≈ 0.01), linked sky
+  images are not collected with the project, render screen: Views and results gallery (3.12).
+- **Build note (this laptop):** `cmake --build --preset local-mingw-debug` (pip's cmake wrapper) hung
+  twice at ninja's "Re-checking globbed directories" and a full parallel build lagged the whole machine.
+  What works: run `ninja -j 2` in `build/local-mingw-debug` with `Qt/Tools/mingw1310_64/bin` on PATH at
+  below-normal priority (~2 min for an app-only rebuild). Verified the render screen with it: HD, Draft,
+  64 samples in 0:34, Save image enabled. The saved window geometry (2018 px) is wider than the
+  1920 px screen, so the render screen's sidebar is clipped on the right until the window is resized.
+
+### 2026-10-21 · Claude (omp) · Owner backlog: click-select, walk, random tiles, orbit modes, gizmos, placement, formats
+
+- **Did:**
+  - **Click-select** in the viewport (a click without dragging; CPU raycast `core/raycast.*`, D-024).
+    Materials and Properties follow, which covers "pick individual objects in Materials".
+  - **Walk mode** (viewport toolbar *Walk*, footprints icon): click to stand there (floor: on the spot;
+    wall: 1.5 m in front of it), W A S D / arrows, drag to look, Shift runs, Q/E down/up, wheel steps,
+    Esc stops; slides along walls. `OrbitCamera::look`/`walk`.
+  - **Rotate each tile randomly** (Materials ▸ Mapping, off by default, saved as `randomTileRotation`):
+    every tile corner gets a random quarter turn and shift, blended across tile middles; color,
+    roughness, normal (tilt turned back with the tile) and height maps use the same lookup. Replaces the
+    far-away bombing for that material.
+  - **Orbit modes** (viewport toolbar + View menu, remembered): around the model, around the point
+    under the cursor (`OrbitCamera::orbitAround`, pivot stays put on screen), look around.
+  - **Gizmo** in Import and Build modes (`core/gizmo.*`, new overlay pass `overlay.vert/.frag`): X/Y/Z
+    arrows, ground square, X/Y/Z rings at the bottom center of the selection, constant screen size,
+    hover highlight, Shift snaps 0.1 m / 15°; groups move once with their children. Build panel quick
+    reference updated. Not in saved images.
+  - **Import placement** (`core/placement.*`): lands on the ground at the drop point, else beside the
+    existing content, else at the origin; OBJ/STL/PLY (no axis information) are stood upright when
+    their flat base says so. `modelBounds`/`moveBy` moved from the Import panel into core
+    (`worldBoundsOf`, `moveBy`, `outermostEntities`).
+  - **Formats** via Assimp 5.4.3 (Collada, 3DS, STL, PLY importers only): `.dae` (SketchUp's free
+    export; units and up axis from the file), `.kmz` (unzipped with miniz), `.3ds`, `.stl`, `.ply`.
+- **Verified:** warning-free `local-mingw-debug` build; 73 tests pass (new: raycast; orbit pivot stays
+  on screen; gizmo size/picking, axis-only moves through a scaled parent, snapping, ring turn past
+  180°; upright guess on a gabled house lying on its back/upside down vs. ambiguous boxes; ground
+  placement; Collada Z-up inches, KMZ, ASCII STL). Scripted runs (PrintWindow captures):
+  - click on the brick wall → *Main volume* selected, Materials shows Bricks113A;
+  - Walk → click on the plinth → standing at eye height facing the wall; held W stops at the wall,
+    held A slides along it;
+  - all materials with random tiles: no repeating grid, relief consistent, soft tile borders;
+  - orbit around the cursor: the grabbed wall point stays under the mouse;
+  - Z-up house OBJ placed 250 m away and 12 m up: imported upright (−90° X), on the ground at the
+    origin; dragging the Y arrow moved it along Y;
+  - Assimp's sample duck.dae (textured) and Spider_binary.stl import upright on the ground.
+- **Decisions:** D-024 (CPU raycast before the 0.7 ID buffer), D-025 (Assimp for more formats),
+  D-026 (orbit modes, overlay lines, gizmo, placement, upright guess).
+- **Next:** ask what "better viewport scaling" means; UI problems (Materials panel width, start screen
+  logo); undo (0.7); real SketchUp/Revit exports through Collada/FBX.
+
+### 2026-10-20 · Claude (omp) · Textures from the web (owner top priority), distance quality, projects
+
+- **Did:**
+  - Project file and start screen (written by two agents before the rate limit; built and smoke-tested
+    the start screen).
+  - Texture sets from zip archives and folders (miniz) and Poliigon naming. The classifier was
+    reading `…_COL_8K_METALNESS` as a metal map.
+  - **Texture library** (Materials ▸ Texture library…): ambientCG and Poly Haven search, categories,
+    1K/2K/4K, download into the local library with JSON records, material at real-world size,
+    applied to the selection. The shared `applyMaterial`/`meshEntitiesIn` helpers moved into core.
+  - Tile-size quick buttons; Materials panel width fixes (stack sized by its widest page; Render lens
+    row); Poly Haven WebP thumbnails switched to PNG.
+  - Distance quality, after the owner said distant brick looked terrible: sRGB-correct mips for color
+    maps, Toksvig specular AA, per-material Variation (macro noise plus distance-faded texture
+    bombing).
+- **Verified:** warning-free build; 61 tests pass (Poliigon/ambientCG classification, zip and folder
+  packs, SceneSync color-upload flag). Scripted runs (PrintWindow captures of LightBox only):
+  - ambientCG Bricks 113 A (2K zip) and Poly Haven Plywood/Red Brick (separate maps) downloaded and
+    applied to all 7 objects at real size;
+  - library reuse ("✓");
+  - the far view of Red Brick has no tile grid after the fixes.
+- **Decisions:** D-023 (online texture library; Poliigon via drops only, since it has no public API).
+- **Next:** the owner backlog above, in order of the owner's choosing.
 
 ### 2026-10-15 · Claude (omp) · Import & textures (owner priority): 1.1, 1.3, FBX, 1.9 partial
 

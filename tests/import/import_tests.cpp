@@ -14,6 +14,17 @@
 
 #include <glm/geometric.hpp>
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+#pragma GCC diagnostic ignored "-Wuseless-cast"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+#include <miniz.h>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 #include "core/scene/scene.hpp"
 #include "import/importer.hpp"
 
@@ -132,8 +143,13 @@ fs::path writeObjFixture(const TempDir& dir) {
     return dir.write("room.obj", kObj);
 }
 
-// A 1 m quad facing +Y (glTF up) with an embedded data-URI buffer, placed twice.
-fs::path writeGltfFixture(const TempDir& dir) {
+// A 1 m quad facing +Y (glTF up) with an embedded data-URI buffer, placed twice. The quad uses the
+// first of `materials` (a JSON array).
+constexpr std::string_view kBlueMaterial =
+    R"([{"name":"Blue","pbrMetallicRoughness":{"baseColorFactor":[0.5,0.25,1,1],)"
+    R"("metallicFactor":0.3,"roughnessFactor":0.7}}])";
+
+fs::path writeGltfFixture(const TempDir& dir, std::string_view materials = kBlueMaterial) {
     const float positions[12] = {0, 0, 0, 1, 0, 0, 1, 0, -1, 0, 0, -1};
     const std::uint16_t indices[6] = {0, 1, 2, 0, 2, 3};
     std::vector<std::uint8_t> buffer(sizeof(positions) + sizeof(indices));
@@ -145,8 +161,7 @@ fs::path writeGltfFixture(const TempDir& dir) {
         R"({"name":"Copy","mesh":0,"translation":[5,0,0]}],)"
         R"("meshes":[{"name":"QuadMesh","primitives":[{"attributes":{"POSITION":0},"indices":1,)"
         R"("material":0}]}],)"
-        R"("materials":[{"name":"Blue","pbrMetallicRoughness":{"baseColorFactor":[0.5,0.25,1,1],)"
-        R"("metallicFactor":0.3,"roughnessFactor":0.7}}],)"
+        R"("materials":)" + std::string(materials) + R"(,)"
         R"("buffers":[{"byteLength":60,"uri":"data:application/octet-stream;base64,)" +
         base64(buffer) +
         R"("}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":48,"target":34962},)"
@@ -353,6 +368,31 @@ TEST_CASE("glTF import with a data-URI buffer converts axes, nodes and materials
     CHECK(model.textures.empty());
 }
 
+TEST_CASE("glTF see-through materials import as glass") {
+    const TempDir dir;
+    const import::ImportedModel model = import::importModel(writeGltfFixture(
+        dir, R"([{"name":"Window","alphaMode":"BLEND","pbrMetallicRoughness":)"
+             R"({"baseColorFactor":[0.9,0.95,1,0.3],"roughnessFactor":0.0,"metallicFactor":0}},)"
+             R"({"name":"Curtain","alphaMode":"BLEND","pbrMetallicRoughness":)"
+             R"({"baseColorFactor":[1,1,1,0.75],"roughnessFactor":0.6,"metallicFactor":0}},)"
+             R"({"name":"Wall","alphaMode":"BLEND","pbrMetallicRoughness":)"
+             R"({"baseColorFactor":[1,1,1,1],"roughnessFactor":0.6,"metallicFactor":0}},)"
+             R"({"name":"Bottle","extensions":{"KHR_materials_transmission":)"
+             R"({"transmissionFactor":0.8},"KHR_materials_volume":{"thicknessFactor":0.01},)"
+             R"("KHR_materials_ior":{"ior":1.45}}}])"));
+    REQUIRE(model.materials.size() == 4);
+    const Material& window = model.materials[0].material;
+    CHECK(window.transmission == doctest::Approx(1.0f)); // glossy and see-through: clear glass
+    CHECK(window.thinWalled);
+    const Material& curtain = model.materials[1].material;
+    CHECK(curtain.transmission == doctest::Approx(0.25f)); // translucent: lets a quarter through
+    CHECK(model.materials[2].material.transmission == doctest::Approx(0.0f)); // fully opaque
+    const Material& bottle = model.materials[3].material;
+    CHECK(bottle.transmission == doctest::Approx(0.8f));
+    CHECK_FALSE(bottle.thinWalled); // has a volume: solid glass that bends light
+    CHECK(bottle.ior == doctest::Approx(1.45f));
+}
+
 TEST_CASE("addToScene builds the hierarchy under a scaled root and counts instances") {
     const TempDir dir;
     Scene scene;
@@ -469,7 +509,127 @@ TEST_CASE("importModel honors cancellation and reports unreadable files") {
 TEST_CASE("model file extensions and unit choices") {
     CHECK(import::isModelFile("House.GLB"));
     CHECK(import::isModelFile("a/b/model.fbx"));
+    CHECK(import::isModelFile("site.KMZ"));
+    CHECK(import::isModelFile("export.dae"));
+    CHECK(import::isModelFile("part.stl"));
     CHECK_FALSE(import::isModelFile("texture.png"));
     CHECK(import::unitChoices().size() == 5);
     CHECK(import::unitChoices()[1].metersPerUnit == doctest::Approx(0.01));
+}
+
+namespace {
+
+// A 100 × 50 inch quad at 10 inches height in a Z-up Collada file (SketchUp's export conventions).
+constexpr std::string_view kCollada = R"(<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><unit meter="0.0254" name="inch"/><up_axis>Z_UP</up_axis></asset>
+  <library_effects><effect id="red-fx"><profile_COMMON><technique sid="common"><lambert>
+    <diffuse><color>1 0 0 1</color></diffuse></lambert></technique></profile_COMMON></effect>
+  </library_effects>
+  <library_materials><material id="red" name="Red"><instance_effect url="#red-fx"/></material>
+  </library_materials>
+  <library_geometries><geometry id="quad" name="quad"><mesh>
+    <source id="quad-pos"><float_array id="quad-pos-array" count="12">0 0 10 100 0 10 100 50 10 0 50 10</float_array>
+      <technique_common><accessor source="#quad-pos-array" count="4" stride="3"><param name="X" type="float"/>
+        <param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+    <vertices id="quad-vtx"><input semantic="POSITION" source="#quad-pos"/></vertices>
+    <triangles material="mat" count="2"><input semantic="VERTEX" source="#quad-vtx" offset="0"/>
+      <p>0 1 2 0 2 3</p></triangles>
+  </mesh></geometry></library_geometries>
+  <library_visual_scenes><visual_scene id="scene"><node id="n" name="Quad">
+    <instance_geometry url="#quad"><bind_material><technique_common>
+      <instance_material symbol="mat" target="#red"/></technique_common></bind_material></instance_geometry>
+  </node></visual_scene></library_visual_scenes>
+  <scene><instance_visual_scene url="#scene"/></scene>
+</COLLADA>
+)";
+
+// World-space positions of every mesh instance (node transforms composed down the hierarchy).
+std::vector<glm::vec3> worldPositions(const import::ImportedModel& model) {
+    std::vector<glm::mat4> world(model.nodes.size());
+    std::vector<glm::vec3> result;
+    for (std::size_t i = 0; i < model.nodes.size(); ++i) {
+        const import::ImportedNode& node = model.nodes[i];
+        world[i] = node.parent >= 0 ? world[static_cast<std::size_t>(node.parent)] * node.transform
+                                    : node.transform;
+        for (const int mesh : node.meshes) {
+            for (const glm::vec3& p : model.meshes[static_cast<std::size_t>(mesh)].data.positions) {
+                result.emplace_back(world[i] * glm::vec4(p, 1.0f));
+            }
+        }
+    }
+    return result;
+}
+
+void checkColladaQuad(const import::ImportedModel& model) {
+    CHECK(model.unitsFromFile);
+    CHECK(model.axesFromFile);
+    CHECK(model.metersPerUnit == doctest::Approx(1.0));
+    const std::vector<glm::vec3> points = worldPositions(model);
+    REQUIRE(points.size() >= 4);
+    for (const glm::vec3& p : points) {
+        CHECK(p.z == doctest::Approx(0.254f).epsilon(1e-3)); // 10 inches up, still up
+        CHECK(p.x >= -1e-4f);
+        CHECK(p.x <= 2.5401f);
+        CHECK(p.y >= -1e-4f);
+        CHECK(p.y <= 1.2701f);
+    }
+    REQUIRE(model.materials.size() == 1);
+    CHECK(model.materials[0].material.baseColor.r > 0.9f);
+    CHECK(model.materials[0].material.baseColor.g < 0.05f);
+}
+
+} // namespace
+
+TEST_CASE("Collada import keeps the file's up axis and units") {
+    const TempDir dir;
+    const import::ImportedModel model = import::importModel(dir.write("quad.dae", kCollada));
+    CHECK(model.format == "Collada");
+    checkColladaQuad(model);
+}
+
+TEST_CASE("KMZ import unpacks the Collada model inside") {
+    const TempDir dir;
+    mz_zip_archive zip{};
+    REQUIRE(mz_zip_writer_init_heap(&zip, 0, 0));
+    const std::string kml = "<kml><Model><Link><href>models/quad.dae</href></Link></Model></kml>";
+    REQUIRE(mz_zip_writer_add_mem(&zip, "doc.kml", kml.data(), kml.size(), MZ_DEFAULT_COMPRESSION));
+    REQUIRE(mz_zip_writer_add_mem(&zip, "models/quad.dae", kCollada.data(), kCollada.size(),
+                                  MZ_DEFAULT_COMPRESSION));
+    void* bytes = nullptr;
+    std::size_t size = 0;
+    REQUIRE(mz_zip_writer_finalize_heap_archive(&zip, &bytes, &size));
+    const fs::path kmz =
+        dir.write("site.kmz", std::string_view(static_cast<const char*>(bytes), size));
+    mz_free(bytes);
+    mz_zip_writer_end(&zip);
+
+    const import::ImportedModel model = import::importModel(kmz);
+    CHECK(model.format == "KMZ (Collada)");
+    checkColladaQuad(model);
+    CHECK_THROWS_AS((void)import::importModel(dir.write("empty.kmz", "not a zip")),
+                    import::ImportError);
+}
+
+TEST_CASE("STL import keeps coordinates, guesses units and flags the unknown up axis") {
+    const TempDir dir;
+    const import::ImportedModel model = import::importModel(dir.write("part.stl", R"(solid part
+facet normal 0 0 1
+ outer loop
+  vertex 0 0 0
+  vertex 1000 0 0
+  vertex 0 2000 0
+ endloop
+endfacet
+endsolid part
+)"));
+    CHECK(model.format == "STL");
+    CHECK_FALSE(model.unitsFromFile);
+    CHECK_FALSE(model.axesFromFile);
+    CHECK(model.metersPerUnit == doctest::Approx(0.01)); // 2000 units: centimeters
+    const std::vector<glm::vec3> points = worldPositions(model);
+    REQUIRE(points.size() == 3);
+    for (const glm::vec3& p : points) {
+        CHECK(p.z == doctest::Approx(0.0f)); // taken as Z-up: no turn
+    }
 }

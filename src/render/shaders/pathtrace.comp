@@ -1,0 +1,854 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_buffer_reference : require
+#define LB_CUSTOM_PUSH
+#define LB_DIVERGENT_TEXTURES
+#include "frame.glsl"
+#include "material.glsl"
+
+// Progressive path tracer (D-027): one sample per pixel of a tile per dispatch, added to a running
+// sum (rgb) with a per-pixel sample count (a). Software BVH traversal over world-space triangles,
+// metal/roughness materials read through material.glsl (same textures and mapping as the raster
+// view), glass (thin panes and solid), emission, sun and sky with next-event estimation, artificial
+// lights with multiple importance sampling, an infinite ground plane at z = 0, Russian roulette.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 1, binding = 0, rgba32f) uniform image2D accumulation;
+
+struct RayVertex {
+    vec3 position;
+    float u;
+    vec3 normal;
+    float v;
+    vec3 boxPosition;
+    uint instance;
+};
+struct RayInstance {
+    vec4 axisX;
+    vec4 axisY;
+    vec4 axisZ;
+};
+// Depth first with miss links (RayNode): no traversal stack, which keeps register use low.
+struct BvhNode {
+    vec3 boundsMin;
+    uint miss; // where to continue when the ray misses this node (or after a leaf)
+    vec3 boundsMax;
+    uint leaf; // 0: interior (first child follows); else (first triangle << 3) | count
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VertexBuffer {
+    RayVertex vertices[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer TriangleBuffer {
+    uvec4 triangles[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer NodeBuffer {
+    BvhNode nodes[];
+};
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer InstanceBuffer {
+    RayInstance instances[];
+};
+// Sky image sampling (core/environment_map): row CDF (grid height), column CDFs (grid width per
+// row), cell probabilities.
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer SkySamplingBuffer {
+    float values[];
+};
+
+layout(push_constant, std430) uniform PathPush {
+    FrameBuffer frame;
+    MaterialBuffer materials;
+    VertexBuffer vertexBuffer;
+    TriangleBuffer triangleBuffer;
+    NodeBuffer nodeBuffer;
+    InstanceBuffer instanceBuffer;
+    SkySamplingBuffer skySampling;
+    ExposureBuffer exposure; // auto exposure state (see composite.frag)
+    uvec4 tile;   // xy: first pixel, zw: size
+    uvec4 params; // x: sample index, y: max bounces, z: node count, w: material count
+} pt;
+
+const float kSunIrradiance = 2.0;    // as in mesh.frag: sun intensity 1 = 100 000 lux
+const float kSunAngularRadius = 0.0047; // radians (the real sun is ≈ 0.27°)
+const float kInfinity = 1e30;
+const uint kNone = 0xFFFFFFFFu;
+const float kGroundAlbedo = 0.2;
+const float kGroundRoughness = 0.9;
+const float kMaxIndirect = 40.0; // firefly clamp for indirect paths at standard daylight exposure
+
+// --- Random numbers (PCG hash) -------------------------------------------------------------------
+
+uint gRng;
+
+uint pcg(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float rand() {
+    gRng = pcg(gRng);
+    return float(gRng >> 8) * (1.0 / 16777216.0);
+}
+
+// --- Geometry ------------------------------------------------------------------------------------
+
+struct Hit {
+    float t;
+    uint triangle; // kNone: nothing hit; kGround: the ground plane
+    float u;
+    float v;
+};
+const uint kGround = 0xFFFFFFFEu;
+
+float boxEntry(vec3 lo, vec3 hi, vec3 origin, vec3 inverse, float tMax) {
+    vec3 t0 = (lo - origin) * inverse;
+    vec3 t1 = (hi - origin) * inverse;
+    vec3 near = min(t0, t1);
+    vec3 far = max(t0, t1);
+    float enter = max(max(near.x, near.y), max(near.z, 0.0));
+    float exit = min(min(far.x, far.y), min(far.z, tMax));
+    return enter <= exit ? enter : kInfinity;
+}
+
+bool intersectTriangle(vec3 origin, vec3 direction, uvec4 tri, float tMax, out float t,
+                       out float u, out float v) {
+    vec3 a = pt.vertexBuffer.vertices[tri.x].position;
+    vec3 e1 = pt.vertexBuffer.vertices[tri.y].position - a;
+    vec3 e2 = pt.vertexBuffer.vertices[tri.z].position - a;
+    vec3 p = cross(direction, e2);
+    float det = dot(e1, p);
+    if (abs(det) < 1e-12) {
+        return false;
+    }
+    float inv = 1.0 / det;
+    vec3 s = origin - a;
+    u = dot(s, p) * inv;
+    if (u < 0.0 || u > 1.0) {
+        return false;
+    }
+    vec3 q = cross(s, e1);
+    v = dot(direction, q) * inv;
+    if (v < 0.0 || u + v > 1.0) {
+        return false;
+    }
+    t = dot(e2, q) * inv;
+    return t > 0.0 && t < tMax;
+}
+
+Hit traceClosest(vec3 origin, vec3 direction, float tMax) {
+    Hit hit;
+    hit.t = tMax;
+    hit.triangle = kNone;
+    hit.u = 0.0;
+    hit.v = 0.0;
+    if (direction.z < 0.0 && origin.z > 0.0) {
+        float tg = -origin.z / direction.z;
+        if (tg < hit.t) {
+            hit.t = tg;
+            hit.triangle = kGround;
+        }
+    }
+    if (pt.params.z == 0u) {
+        return hit;
+    }
+    vec3 inverse = 1.0 / direction;
+    uint node = 0u;
+    while (node < pt.params.z) {
+        BvhNode n = pt.nodeBuffer.nodes[node];
+        if (boxEntry(n.boundsMin, n.boundsMax, origin, inverse, hit.t) >= kInfinity) {
+            node = n.miss;
+            continue;
+        }
+        if (n.leaf == 0u) {
+            node += 1u;
+            continue;
+        }
+        uint first = n.leaf >> 3;
+        uint end = first + (n.leaf & 7u);
+        for (uint i = first; i < end; ++i) {
+            float t, u, v;
+            if (intersectTriangle(origin, direction, pt.triangleBuffer.triangles[i], hit.t, t, u,
+                                  v)) {
+                hit.t = t;
+                hit.triangle = i;
+                hit.u = u;
+                hit.v = v;
+            }
+        }
+        node = n.miss;
+    }
+    return hit;
+}
+
+float fresnelDielectric(float cosI, float eta) {
+    // eta = n_inside / n_outside as seen from the incoming side.
+    float sinT2 = (1.0 - cosI * cosI) / (eta * eta);
+    if (sinT2 >= 1.0) {
+        return 1.0; // total internal reflection
+    }
+    float cosT = sqrt(1.0 - sinT2);
+    float rs = (cosI - eta * cosT) / (cosI + eta * cosT);
+    float rp = (eta * cosI - cosT) / (eta * cosI + cosT);
+    return 0.5 * (rs * rs + rp * rp);
+}
+
+// How much light passes from origin along direction for tMax: 0 behind anything opaque, tinted
+// through glass (shadow rays see sunlight through windows).
+vec3 traceTransmittance(vec3 origin, vec3 direction, float tMax) {
+    if (direction.z < 0.0 && origin.z > 0.0 && -origin.z / direction.z < tMax) {
+        return vec3(0.0);
+    }
+    vec3 transmittance = vec3(1.0);
+    if (pt.params.z == 0u) {
+        return transmittance;
+    }
+    vec3 inverse = 1.0 / direction;
+    uint node = 0u;
+    while (node < pt.params.z) {
+        BvhNode n = pt.nodeBuffer.nodes[node];
+        if (boxEntry(n.boundsMin, n.boundsMax, origin, inverse, tMax) >= kInfinity) {
+            node = n.miss;
+            continue;
+        }
+        if (n.leaf == 0u) {
+            node += 1u;
+            continue;
+        }
+        uint first = n.leaf >> 3;
+        uint end = first + (n.leaf & 7u);
+        for (uint i = first; i < end; ++i) {
+            uvec4 tri = pt.triangleBuffer.triangles[i];
+            float t, u, v;
+            if (!intersectTriangle(origin, direction, tri, tMax, t, u, v)) {
+                continue;
+            }
+            GpuMaterial m = pt.materials.materials[min(tri.w, pt.params.w - 1u)];
+            float transmission = m.glass.x;
+            if (transmission <= 0.0) {
+                return vec3(0.0);
+            }
+            vec3 a = pt.vertexBuffer.vertices[tri.x].position;
+            vec3 ng = normalize(cross(pt.vertexBuffer.vertices[tri.y].position - a,
+                                      pt.vertexBuffer.vertices[tri.z].position - a));
+            float cosI = abs(dot(ng, direction));
+            float fr = fresnelDielectric(cosI, m.glass.y);
+            if (m.glass.z > 0.5) {
+                fr = 2.0 * fr / (1.0 + fr); // a thin pane reflects at both faces
+            }
+            vec3 tint = clamp(m.baseColor.rgb, 0.0, 1.0);
+            transmittance *= tint * transmission * (1.0 - fr);
+            if (max(transmittance.r, max(transmittance.g, transmittance.b)) < 1e-3) {
+                return vec3(0.0);
+            }
+        }
+        node = n.miss;
+    }
+    return transmittance;
+}
+
+// --- Lights ----------------------------------------------------------------------------------------
+
+struct LightHit {
+    bool found;
+    vec3 radiance;
+    float pdf; // solid-angle pdf of sampling this point by next-event estimation (incl. selection)
+};
+
+float lightSelectPdf(FrameData f) {
+    uint count = min(f.lightInfo.x, kMaxLights);
+    return count > 0u ? 1.0 / float(count) : 0.0;
+}
+
+float spotFactor(GpuLight light, vec3 fromLight) {
+    uint type = uint(light.position.w + 0.5);
+    return type == kLightSpot
+               ? smoothstep(light.params.x, light.params.y, dot(fromLight, light.direction.xyz))
+               : 1.0;
+}
+
+// Bulbs are small glowing spheres, area lights one-sided rectangles: rays can hit them directly.
+LightHit intersectLights(FrameData f, vec3 origin, vec3 direction, float tMax) {
+    LightHit result;
+    result.found = false;
+    uint count = min(f.lightInfo.x, kMaxLights);
+    float closest = tMax;
+    for (uint i = 0u; i < count; ++i) {
+        GpuLight light = f.lights[i];
+        uint type = uint(light.position.w + 0.5);
+        if (type == kLightArea) {
+            vec3 n = light.direction.xyz;
+            float denom = dot(direction, n);
+            if (denom >= 0.0) {
+                continue; // seen from behind: dark
+            }
+            float t = dot(light.position.xyz - origin, n) / denom;
+            if (t <= 0.0 || t >= closest) {
+                continue;
+            }
+            vec3 q = origin + direction * t - light.position.xyz;
+            if (abs(dot(q, light.axisX.xyz)) > light.params.x ||
+                abs(dot(q, light.axisY.xyz)) > light.params.y) {
+                continue;
+            }
+            float area = 4.0 * light.params.x * light.params.y;
+            closest = t;
+            result.found = true;
+            result.radiance = light.intensity.rgb;
+            result.pdf = lightSelectPdf(f) * t * t / (max(-denom, 1e-6) * area);
+        } else {
+            float r = light.direction.w;
+            vec3 oc = origin - light.position.xyz;
+            float b = dot(oc, direction);
+            float c = dot(oc, oc) - r * r;
+            float disc = b * b - c;
+            if (c <= 0.0 || disc <= 0.0) {
+                continue;
+            }
+            float t = -b - sqrt(disc);
+            if (t <= 0.0 || t >= closest) {
+                continue;
+            }
+            float distSq = dot(oc, oc);
+            float cosMax = sqrt(max(1.0 - r * r / distSq, 0.0));
+            closest = t;
+            result.found = true;
+            // A sphere of radius r with intensity I glows with radiance I / (π r²).
+            result.radiance = light.intensity.rgb / (PI * r * r) * spotFactor(light, direction);
+            result.pdf = lightSelectPdf(f) / (2.0 * PI * max(1.0 - cosMax, 1e-7));
+        }
+    }
+    return result;
+}
+
+// --- BSDF ------------------------------------------------------------------------------------------
+
+vec3 schlick(vec3 f0, float cosTheta) {
+    return f0 + (1.0 - f0) * pow(1.0 - clamp(cosTheta, 0.0, 1.0), 5.0);
+}
+
+float luminance(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void basis(vec3 n, out vec3 t, out vec3 b) {
+    // Duff et al., "Building an Orthonormal Basis, Revisited".
+    float s = n.z >= 0.0 ? 1.0 : -1.0;
+    float a = -1.0 / (s + n.z);
+    float c = n.x * n.y * a;
+    t = vec3(1.0 + s * n.x * n.x * a, s * c, -s * n.x);
+    b = vec3(c, s + n.y * n.y * a, -n.y);
+}
+
+float ggxD(float nDotH, float a2) {
+    float d = nDotH * nDotH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+
+float smithG1(float nDotX, float a2) {
+    return 2.0 * nDotX / (nDotX + sqrt(a2 + (1.0 - a2) * nDotX * nDotX));
+}
+
+// Visible-normal sampling of GGX (Heitz 2018), in the frame where n = +z.
+vec3 sampleGgxVisible(vec3 v, float a) {
+    vec3 vh = normalize(vec3(a * v.x, a * v.y, v.z));
+    float lensq = vh.x * vh.x + vh.y * vh.y;
+    vec3 t1 = lensq > 0.0 ? vec3(-vh.y, vh.x, 0.0) * inversesqrt(lensq) : vec3(1.0, 0.0, 0.0);
+    vec3 t2 = cross(vh, t1);
+    float r = sqrt(rand());
+    float phi = 2.0 * PI * rand();
+    float p1 = r * cos(phi);
+    float p2 = r * sin(phi);
+    float s = 0.5 * (1.0 + vh.z);
+    p2 = (1.0 - s) * sqrt(1.0 - p1 * p1) + s * p2;
+    vec3 nh = p1 * t1 + p2 * t2 + sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2)) * vh;
+    return normalize(vec3(a * nh.x, a * nh.y, max(1e-6, nh.z)));
+}
+
+struct Lobe {
+    vec3 diffuseColor;
+    vec3 f0;
+    float roughness;
+    float specularChance;
+};
+
+Lobe opaqueLobe(SurfaceSample s, float nDotV) {
+    Lobe lobe;
+    lobe.diffuseColor = s.baseColor * (1.0 - s.metalness);
+    lobe.f0 = mix(vec3(0.04), s.baseColor, s.metalness);
+    lobe.roughness = s.roughness;
+    float spec = luminance(schlick(lobe.f0, nDotV));
+    float diff = luminance(lobe.diffuseColor) * (1.0 - spec);
+    lobe.specularChance = spec + diff > 0.0 ? clamp(spec / (spec + diff), 0.1, 1.0) : 0.5;
+    return lobe;
+}
+
+// BSDF × cosine toward l, and the pdf of sampling l with sampleOpaque.
+vec3 evalOpaque(Lobe lobe, vec3 n, vec3 v, vec3 l, out float pdf) {
+    float nDotL = dot(n, l);
+    float nDotV = max(dot(n, v), 1e-4);
+    pdf = 0.0;
+    if (nDotL <= 0.0) {
+        return vec3(0.0);
+    }
+    vec3 h = normalize(v + l);
+    float nDotH = max(dot(n, h), 0.0);
+    float vDotH = max(dot(v, h), 1e-4);
+    float a = lobe.roughness * lobe.roughness;
+    float a2 = a * a;
+    float d = ggxD(nDotH, a2);
+    float g1v = smithG1(nDotV, a2);
+    float g = g1v * smithG1(nDotL, a2);
+    vec3 fresnel = schlick(lobe.f0, vDotH);
+    vec3 specular = fresnel * d * g / (4.0 * nDotV);
+    vec3 diffuse = lobe.diffuseColor * (1.0 - luminance(schlick(lobe.f0, nDotV))) / PI * nDotL;
+    float pdfSpecular = g1v * d / (4.0 * nDotV);
+    float pdfDiffuse = nDotL / PI;
+    pdf = lobe.specularChance * pdfSpecular + (1.0 - lobe.specularChance) * pdfDiffuse;
+    return specular + diffuse;
+}
+
+vec3 sampleOpaque(Lobe lobe, vec3 n, vec3 v) {
+    vec3 t, b;
+    basis(n, t, b);
+    if (rand() < lobe.specularChance) {
+        vec3 vl = vec3(dot(v, t), dot(v, b), dot(v, n));
+        float a = lobe.roughness * lobe.roughness;
+        vec3 hl = sampleGgxVisible(vl, a);
+        vec3 h = t * hl.x + b * hl.y + n * hl.z;
+        return reflect(-v, h);
+    }
+    float r = sqrt(rand());
+    float phi = 2.0 * PI * rand();
+    return normalize(t * (r * cos(phi)) + b * (r * sin(phi)) + n * sqrt(max(0.0, 1.0 - r * r)));
+}
+
+float powerHeuristic(float a, float b) {
+    float a2 = a * a;
+    return a2 / max(a2 + b * b, 1e-20);
+}
+
+// First entry of the CDF values[offset .. offset + count) above x.
+uint searchCdf(uint offset, uint count, float x) {
+    uint lo = 0u;
+    uint hi = count - 1u;
+    while (lo < hi) {
+        uint mid = (lo + hi) >> 1u;
+        if (pt.skySampling.values[offset + mid] > x) {
+            hi = mid;
+        } else {
+            lo = mid + 1u;
+        }
+    }
+    return lo;
+}
+
+// Solid-angle pdf of choosing grid cell (row, col) and then a uniform point in it at polar angle
+// with sine sinTheta.
+float skyCellPdf(FrameData f, uint row, uint col, float sinTheta) {
+    uint gw = f.skyImage.y;
+    uint gh = f.skyImage.z;
+    float probability = pt.skySampling.values[gh + gw * gh + row * gw + col];
+    return probability * float(gw * gh) / (2.0 * PI * PI * max(sinTheta, 1e-4));
+}
+
+// A direction toward the sky image, chosen by brightness × solid angle.
+vec3 sampleSkyImage(FrameData f, out float pdf) {
+    uint gw = f.skyImage.y;
+    uint gh = f.skyImage.z;
+    uint row = searchCdf(0u, gh, rand());
+    uint col = searchCdf(gh + row * gw, gw, rand());
+    vec2 uv = vec2((float(col) + rand()) / float(gw), (float(row) + rand()) / float(gh));
+    pdf = skyCellPdf(f, row, col, sin(uv.y * PI));
+    return skyImageDirection(f, uv);
+}
+
+// The pdf with which directLight samples the sky along direction.
+float skyPdf(FrameData f, vec3 direction) {
+    if (!hasSkyImage(f)) {
+        return max(direction.z, 0.0) / PI; // cosine-weighted around the zenith
+    }
+    vec2 uv = skyImageUv(f, direction);
+    uint col = min(uint(uv.x * float(f.skyImage.y)), f.skyImage.y - 1u);
+    uint row = min(uint(uv.y * float(f.skyImage.z)), f.skyImage.z - 1u);
+    return skyCellPdf(f, row, col, sqrt(max(1.0 - direction.z * direction.z, 0.0)));
+}
+
+vec3 sunDisc(FrameData f, vec3 direction) {
+    float cosRadius = cos(kSunAngularRadius);
+    if (dot(direction, f.sunDirection.xyz) < cosRadius) {
+        return vec3(0.0);
+    }
+    float solidAngle = 2.0 * PI * (1.0 - cosRadius);
+    return f.sunColor.rgb * (kSunIrradiance * PI) / solidAngle;
+}
+
+vec3 environment(FrameData f, vec3 direction) {
+    return skyLight(f, direction, 0.0);
+}
+
+// Next-event estimation at an opaque surface: the sun, the sky (MIS with the BSDF) and one
+// randomly chosen artificial light (MIS).
+vec3 directLight(FrameData f, Lobe lobe, vec3 p, vec3 n, vec3 v, vec3 offsetNormal,
+                 float reliefShadow) {
+    vec3 result = vec3(0.0);
+    vec3 origin = p + offsetNormal;
+
+    // Sun: a small cone around its direction (softness scales it, like the raster shadows).
+    if (f.sunDirection.z > -0.05 && max(f.sunColor.r, max(f.sunColor.g, f.sunColor.b)) > 0.0) {
+        float radius = kSunAngularRadius * (0.5 + f.shadowParams.y / 6.0);
+        vec3 t, b;
+        basis(f.sunDirection.xyz, t, b);
+        float r = radius * sqrt(rand());
+        float phi = 2.0 * PI * rand();
+        vec3 l = normalize(f.sunDirection.xyz + t * (r * cos(phi)) + b * (r * sin(phi)));
+        float pdf;
+        vec3 fcos = evalOpaque(lobe, n, v, l, pdf);
+        if (pdf > 0.0) {
+            vec3 visible = traceTransmittance(origin, l, kInfinity) * reliefShadow;
+            result += fcos * f.sunColor.rgb * (kSunIrradiance * PI) * visible;
+        }
+    }
+
+    // Sky: the sky image by brightness, the procedural sky cosine-weighted (MIS with the BSDF).
+    {
+        vec3 l;
+        float pdfSky;
+        if (hasSkyImage(f)) {
+            l = sampleSkyImage(f, pdfSky);
+        } else {
+            float r = sqrt(rand());
+            float phi = 2.0 * PI * rand();
+            l = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - r * r)));
+            pdfSky = skyPdf(f, l);
+        }
+        float pdfBsdf;
+        vec3 fcos = evalOpaque(lobe, n, v, l, pdfBsdf);
+        if (pdfBsdf > 0.0 && pdfSky > 0.0) {
+            vec3 visible = traceTransmittance(origin, l, kInfinity);
+            if (max(visible.r, max(visible.g, visible.b)) > 0.0) {
+                result += fcos * environment(f, l) * visible / pdfSky *
+                          powerHeuristic(pdfSky, pdfBsdf);
+            }
+        }
+    }
+
+    // One artificial light.
+    uint count = min(f.lightInfo.x, kMaxLights);
+    if (count > 0u) {
+        uint index = min(uint(rand() * float(count)), count - 1u);
+        GpuLight light = f.lights[index];
+        float select = 1.0 / float(count);
+        uint type = uint(light.position.w + 0.5);
+        vec3 l;
+        float distance;
+        float pdfLight;
+        vec3 radiance;
+        if (type == kLightArea) {
+            vec3 q = light.position.xyz + light.axisX.xyz * (light.params.x * (2.0 * rand() - 1.0)) +
+                     light.axisY.xyz * (light.params.y * (2.0 * rand() - 1.0));
+            vec3 toLight = q - origin;
+            float distSq = dot(toLight, toLight);
+            distance = sqrt(distSq);
+            l = toLight / distance;
+            float cosLight = dot(-l, light.direction.xyz);
+            float area = 4.0 * light.params.x * light.params.y;
+            pdfLight = cosLight > 0.0 ? select * distSq / (cosLight * area) : 0.0;
+            radiance = light.intensity.rgb;
+        } else {
+            float r = light.direction.w;
+            vec3 toCenter = light.position.xyz - origin;
+            float distSq = dot(toCenter, toCenter);
+            if (distSq <= r * r) {
+                return result;
+            }
+            float cosMax = sqrt(max(1.0 - r * r / distSq, 0.0));
+            vec3 w = toCenter * inversesqrt(distSq);
+            vec3 t, b;
+            basis(w, t, b);
+            float cosTheta = 1.0 - rand() * (1.0 - cosMax);
+            float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+            float phi = 2.0 * PI * rand();
+            l = normalize(t * (sinTheta * cos(phi)) + b * (sinTheta * sin(phi)) + w * cosTheta);
+            distance = sqrt(distSq) - r;
+            pdfLight = select / (2.0 * PI * max(1.0 - cosMax, 1e-7));
+            radiance = light.intensity.rgb / (PI * r * r) * spotFactor(light, -l);
+        }
+        float pdfBsdf;
+        vec3 fcos = evalOpaque(lobe, n, v, l, pdfBsdf);
+        if (pdfLight > 0.0 && pdfBsdf > 0.0 && max(radiance.r, max(radiance.g, radiance.b)) > 0.0) {
+            vec3 visible = traceTransmittance(origin, l, distance * 0.999);
+            result += fcos * radiance * visible / pdfLight * powerHeuristic(pdfLight, pdfBsdf);
+        }
+    }
+    return result;
+}
+
+// --- Surface at a hit ------------------------------------------------------------------------------
+
+struct Surface {
+    vec3 position;
+    vec3 geometricNormal; // facing the incoming ray
+    bool entering;        // the ray arrives on the side the winding calls front (solid glass)
+    float reliefShadow;   // sunlight the height-map relief lets through (1 = all)
+    SurfaceSample s;
+};
+
+Surface surfaceAt(FrameData f, Hit hit, vec3 origin, vec3 direction, float footprint,
+                  bool detailed) {
+    Surface surface;
+    surface.position = origin + direction * hit.t;
+    bool clay = f.look2.y > 0.5;
+    if (hit.triangle == kGround) {
+        surface.geometricNormal = vec3(0.0, 0.0, 1.0);
+        surface.entering = true;
+        surface.reliefShadow = 1.0;
+        surface.s.baseColor = vec3(kGroundAlbedo);
+        surface.s.roughness = kGroundRoughness;
+        surface.s.metalness = 0.0;
+        surface.s.occlusion = 1.0;
+        surface.s.normal = vec3(0.0, 0.0, 1.0);
+        surface.s.transmission = 0.0;
+        surface.s.ior = 1.5;
+        surface.s.thinWalled = true;
+        surface.s.emission = vec3(0.0);
+        return surface;
+    }
+    uvec4 tri = pt.triangleBuffer.triangles[hit.triangle];
+    RayVertex a = pt.vertexBuffer.vertices[tri.x];
+    RayVertex b = pt.vertexBuffer.vertices[tri.y];
+    RayVertex c = pt.vertexBuffer.vertices[tri.z];
+    float w = 1.0 - hit.u - hit.v;
+    vec3 e1 = b.position - a.position;
+    vec3 e2 = c.position - a.position;
+    vec3 ng = normalize(cross(e1, e2));
+    surface.entering = dot(ng, direction) < 0.0;
+    if (!surface.entering) {
+        ng = -ng;
+    }
+    vec3 n = normalize(a.normal * w + b.normal * hit.u + c.normal * hit.v);
+    if (dot(n, ng) < 0.0) {
+        n = -n; // two-sided, like the raster view
+    }
+    surface.geometricNormal = ng;
+
+    GpuMaterial m = pt.materials.materials[min(tri.w, pt.params.w - 1u)];
+    SurfaceCoords coords;
+    vec2 uvA = vec2(a.u, a.v);
+    vec2 duv1 = vec2(b.u, b.v) - uvA;
+    vec2 duv2 = vec2(c.u, c.v) - uvA;
+    coords.uv = uvA * w + vec2(b.u, b.v) * hit.u + vec2(c.u, c.v) * hit.v;
+    // UV gradients along the triangle (as the raster view, from edges instead of screen pixels).
+    vec3 dp2perp = cross(e2, ng);
+    vec3 dp1perp = cross(ng, e1);
+    float det = dot(e1, dp2perp);
+    float inverseDet = abs(det) > 1e-20 ? 1.0 / det : 0.0;
+    coords.gradU = (dp2perp * duv1.x + dp1perp * duv2.x) * inverseDet;
+    coords.gradV = (dp2perp * duv1.y + dp1perp * duv2.y) * inverseDet;
+    float worldArea = max(length(cross(e1, e2)), 1e-12);
+    float uvArea = abs(duv1.x * duv2.y - duv1.y * duv2.x);
+    float uvPerMeter = sqrt(uvArea / worldArea);
+    coords.uvDx = vec2(footprint * uvPerMeter, 0.0);
+    coords.uvDy = vec2(0.0, footprint * uvPerMeter);
+    coords.boxPosition = a.boxPosition * w + b.boxPosition * hit.u + c.boxPosition * hit.v;
+    coords.boxDx = vec3(0.0);
+    coords.boxDy = vec3(0.0);
+    coords.footprint = max(footprint, 1e-6);
+    RayInstance instance = pt.instanceBuffer.instances[a.instance];
+    coords.axisX = instance.axisX.xyz;
+    coords.axisY = instance.axisY.xyz;
+    coords.axisZ = instance.axisZ.xyz;
+    coords.boxNormal = vec3(dot(n, coords.axisX), dot(n, coords.axisY), dot(n, coords.axisZ));
+
+    bool textured = !clay && materialTextured(m);
+    surface.reliefShadow = 1.0;
+    if (textured) {
+        setupProjections(m, coords);
+        if (detailed) {
+            // Height-map depth (parallax and its sun shadows), as in the raster view.
+            surface.reliefShadow = applyRelief(m, n, -direction, f.sunDirection.xyz);
+        }
+    }
+    surface.s = sampleSurface(m, n, textured, clay, detailed);
+    // Normal maps can tilt the shading normal away from the viewer at grazing angles.
+    vec3 v = -direction;
+    float facing = dot(surface.s.normal, v);
+    if (facing < 0.02) {
+        surface.s.normal = normalize(surface.s.normal + v * (0.02 - facing));
+    }
+    return surface;
+}
+
+// --- Path ------------------------------------------------------------------------------------------
+
+// The firefly clamp follows the exposure the image is shown with: kMaxIndirect at the exposure of a
+// sunlit daytime view, proportionally lower in darker scenes (a dusk or interior image would
+// otherwise never be clamped, and rare bright paths stay as speckles for hundreds of samples).
+float indirectClamp(FrameData f) {
+    float scale = f.look.x;
+    if (f.look2.w > 0.5 && pt.exposure.state.y > 0.5) {
+        scale *= kExposureKey / exp2(pt.exposure.state.x);
+    }
+    return kMaxIndirect / max(scale, 1e-8);
+}
+
+vec3 tracePath(FrameData f, vec3 origin, vec3 direction, float pixelSpread) {
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    bool specularBounce = true; // camera ray or a mirror-like (glass) bounce: count light directly
+    float lastPdf = 0.0;
+    float coneWidth = 0.0;
+    float coneSpread = pixelSpread;
+    uint maxBounces = max(pt.params.y, 1u);
+    float maxIndirect = indirectClamp(f);
+
+    for (uint bounce = 0u; bounce <= maxBounces; ++bounce) {
+        Hit hit = traceClosest(origin, direction, kInfinity);
+        LightHit lightHit = intersectLights(f, origin, direction, hit.t);
+        vec3 contribution = vec3(0.0);
+        bool stop = false;
+        if (lightHit.found) {
+            float weight = specularBounce ? 1.0 : powerHeuristic(lastPdf, lightHit.pdf);
+            contribution = throughput * lightHit.radiance * weight;
+            stop = true;
+        } else if (hit.triangle == kNone) {
+            vec3 sky = environment(f, direction);
+            float weight = !specularBounce ? powerHeuristic(lastPdf, skyPdf(f, direction)) : 1.0;
+            contribution = throughput * sky * weight;
+            if (specularBounce) {
+                contribution += throughput * sunDisc(f, direction);
+            }
+            stop = true;
+        }
+        if (stop) {
+            if (bounce > 0u) {
+                float l = luminance(contribution);
+                contribution *= l > maxIndirect ? maxIndirect / l : 1.0;
+            }
+            radiance += contribution;
+            break;
+        }
+
+        coneWidth += coneSpread * hit.t;
+        // Full material detail where it is seen directly or in mirrors and glass.
+        Surface surface = surfaceAt(f, hit, origin, direction, coneWidth, specularBounce);
+        SurfaceSample s = surface.s;
+        vec3 v = -direction;
+        vec3 n = s.normal;
+        vec3 ng = surface.geometricNormal;
+        float offset = 1e-4 * (1.0 + max(max(abs(surface.position.x), abs(surface.position.y)),
+                                         abs(surface.position.z)));
+
+        vec3 emitted = throughput * s.emission;
+        if (bounce > 0u) {
+            float l = luminance(emitted);
+            emitted *= l > maxIndirect ? maxIndirect / l : 1.0;
+        }
+        radiance += emitted;
+        if (bounce == maxBounces) {
+            break;
+        }
+
+        if (rand() < s.transmission) {
+            // Glass: reflect or pass through, chosen by Fresnel (exact, no weights).
+            vec3 tint = clamp(s.baseColor, 0.0, 1.0);
+            vec3 mn = n;
+            if (s.roughness > 0.05) {
+                vec3 t, b;
+                basis(n, t, b);
+                vec3 vl = vec3(dot(v, t), dot(v, b), dot(v, n));
+                vec3 hl = sampleGgxVisible(vl, s.roughness * s.roughness);
+                mn = t * hl.x + b * hl.y + n * hl.z;
+            }
+            float cosI = clamp(dot(v, mn), 0.0, 1.0);
+            if (s.thinWalled) {
+                float fr = fresnelDielectric(cosI, s.ior);
+                fr = 2.0 * fr / (1.0 + fr);
+                if (rand() < fr) {
+                    direction = reflect(-v, mn);
+                    origin = surface.position + ng * offset;
+                } else {
+                    // Straight through (both faces of the pane), frosted by roughness.
+                    direction = normalize(direction + (mn - n) * 2.0);
+                    origin = surface.position - ng * offset;
+                    throughput *= tint;
+                }
+            } else {
+                float eta = surface.entering ? s.ior : 1.0 / s.ior;
+                float fr = fresnelDielectric(cosI, eta);
+                vec3 refracted = refract(-v, mn, 1.0 / eta);
+                if (rand() < fr || dot(refracted, refracted) == 0.0) {
+                    direction = reflect(-v, mn);
+                    origin = surface.position + ng * offset;
+                } else {
+                    direction = normalize(refracted);
+                    origin = surface.position - ng * offset;
+                    if (surface.entering) {
+                        throughput *= tint;
+                    }
+                }
+            }
+            specularBounce = true;
+            coneSpread += s.roughness * 0.5;
+        } else {
+            Lobe lobe = opaqueLobe(s, max(dot(n, v), 1e-4));
+            vec3 direct = throughput * directLight(f, lobe, surface.position, n, v, ng * offset,
+                                                   surface.reliefShadow);
+            if (bounce > 0u) {
+                float l = luminance(direct);
+                direct *= l > maxIndirect ? maxIndirect / l : 1.0;
+            }
+            radiance += direct;
+
+            direction = sampleOpaque(lobe, n, v);
+            float pdf;
+            vec3 fcos = evalOpaque(lobe, n, v, direction, pdf);
+            if (pdf <= 0.0 || dot(direction, ng) <= 0.0) {
+                break;
+            }
+            throughput *= fcos / pdf;
+            lastPdf = pdf;
+            specularBounce = false;
+            origin = surface.position + ng * offset;
+            // Diffuse bounces blur everything after them: textures can be read coarsely.
+            coneSpread += mix(0.4, s.roughness * 0.5, lobe.specularChance);
+        }
+
+        if (bounce >= 2u) {
+            float survive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
+            if (rand() > survive) {
+                break;
+            }
+            throughput /= survive;
+        }
+    }
+    return radiance;
+}
+
+void main() {
+    uvec2 local = gl_GlobalInvocationID.xy;
+    if (local.x >= pt.tile.z || local.y >= pt.tile.w) {
+        return;
+    }
+    ivec2 pixel = ivec2(pt.tile.xy + local);
+    ivec2 size = imageSize(accumulation);
+    if (pixel.x >= size.x || pixel.y >= size.y) {
+        return;
+    }
+    FrameData f = pt.frame.data;
+    gRng = pcg(uint(pixel.x) + pcg(uint(pixel.y) + pcg(pt.params.x * 9781u + 17u)));
+
+    // Jittered camera ray through the pixel (anti-aliasing comes from accumulation).
+    vec2 jitter = vec2(rand(), rand());
+    vec2 ndc = (vec2(pixel) + jitter) * f.viewport.zw * 2.0 - 1.0;
+    vec3 direction = viewRayDirection(f, ndc);
+    vec3 next = viewRayDirection(f, ndc + vec2(2.0 * f.viewport.z, 0.0));
+    float pixelSpread = length(next - direction);
+    vec3 origin = f.cameraPosition.xyz;
+
+    vec3 radiance = tracePath(f, origin, direction, pixelSpread);
+    if (any(isnan(radiance)) || any(isinf(radiance))) {
+        radiance = vec3(0.0);
+    }
+    vec4 sum = imageLoad(accumulation, pixel);
+    imageStore(accumulation, pixel, sum + vec4(radiance, 1.0));
+}

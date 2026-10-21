@@ -37,6 +37,10 @@ struct Renderer::Impl {
         return handle.valid() && handle.index < textures.size() &&
                textures[handle.index].image != VK_NULL_HANDLE;
     }
+    // Throws when every bindless slot is taken.
+    void checkTextureCapacity() const;
+    // Puts a created texture into a free slot of the bindless table.
+    TextureHandle addTexture(const GpuTexture& texture);
 
     GpuContext context;
     Pipelines pipelines;
@@ -50,6 +54,7 @@ struct Renderer::Impl {
     VkDescriptorPool texturePool = VK_NULL_HANDLE;
     VkDescriptorSet textureSet = VK_NULL_HANDLE;
     bool linearBlit = false; // RGBA8 supports linear-filtered blits (mip generation quality)
+    bool srgbBlit = false;   // sRGB RGBA8 can be blitted with linear filtering (color map mips)
 
 private:
     void createTextureTable();

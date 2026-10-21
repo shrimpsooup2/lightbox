@@ -1,15 +1,26 @@
 # lb_core: platform-neutral foundation. Depends on the standard library, GLM and stb_image (private)
 # only — no Qt, no Vulkan.
 add_library(lb_core STATIC
+    bvh.cpp
+    bvh.hpp
     camera.cpp
     camera.hpp
     color.cpp
     color.hpp
+    gizmo.cpp
+    gizmo.hpp
+    environment_map.cpp
+    environment_map.hpp
     image.cpp
     image.hpp
     log.cpp
     log.hpp
+    raycast.cpp
+    raycast.hpp
     mesh.hpp
+    overlay.hpp
+    placement.cpp
+    placement.hpp
     primitives.cpp
     primitives.hpp
     sample_scene.cpp
@@ -19,6 +30,7 @@ add_library(lb_core STATIC
     scene/environment.cpp
     scene/environment.hpp
     scene/ids.hpp
+    scene/light.hpp
     scene/look.hpp
     scene/material.hpp
     scene/scene.cpp

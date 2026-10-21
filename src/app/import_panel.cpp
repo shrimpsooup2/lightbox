@@ -41,6 +41,7 @@
 #include "app/viewport_window.hpp"
 #include "core/image.hpp"
 #include "core/log.hpp"
+#include "core/placement.hpp"
 
 namespace lb::app {
 namespace {
@@ -114,36 +115,6 @@ ResourceSnapshot snapshot(const Scene& scene) {
     return result;
 }
 
-// `id` and all of its descendants, parents first.
-std::vector<EntityId> subtree(const Scene& scene, EntityId id) {
-    std::vector<EntityId> result;
-    std::vector<EntityId> pending{id};
-    while (!pending.empty()) {
-        const EntityId next = pending.back();
-        pending.pop_back();
-        const Entity* entity = scene.entity(next);
-        if (entity == nullptr) {
-            continue;
-        }
-        result.push_back(next);
-        pending.insert(pending.end(), entity->children.rbegin(), entity->children.rend());
-    }
-    return result;
-}
-
-// Moves a (possibly parented) entity by a world-space offset.
-void moveBy(Scene& scene, EntityId id, const glm::vec3& worldOffset) {
-    const Entity* entity = scene.entity(id);
-    if (entity == nullptr) {
-        return;
-    }
-    const glm::mat4 parentWorld =
-        entity->parent ? scene.worldMatrix(entity->parent) : glm::mat4(1.0f);
-    Transform transform = entity->transform;
-    transform.position += glm::vec3(glm::inverse(parentWorld) * glm::vec4(worldOffset, 0.0f));
-    scene.setTransform(id, transform);
-}
-
 template <class Exists>
 void removeUnused(Scene& scene, const std::vector<ResourceId>& ids, Exists exists) {
     for (const ResourceId id : ids) {
@@ -172,7 +143,8 @@ ImportPanel::ImportPanel(Scene& scene, Selection& selection, ViewportWindow& vie
     auto* importModel =
         new QPushButton(theme::icon(QStringLiteral("download")), tr("Import model…"), page);
     importModel->setProperty("accent", true);
-    importModel->setToolTip(tr("Add a glTF, OBJ or FBX model to the scene (Ctrl+I)."));
+    importModel->setToolTip(tr("Add a model to the scene: SketchUp (export as Collada .dae), glTF, FBX, OBJ, KMZ, 3DS, "
+                              "STL or PLY (Ctrl+I)."));
     layout->addWidget(importModel);
     auto* textureSet =
         new QPushButton(theme::icon(QStringLiteral("image-plus")), tr("Material from textures…"), page);
@@ -344,23 +316,28 @@ bool ImportPanel::isModelPath(const QString& path) {
 
 bool ImportPanel::isImportable(const QString& path) {
     const std::filesystem::path file = toPath(path);
-    return import::isModelFile(file) || isImageFile(file);
+    return import::isModelFile(file) || import::isTextureSource(file);
 }
 
 void ImportPanel::importFiles(const QStringList& paths, bool switchMode) {
     QStringList images;
     QStringList skipped;
+    const std::optional<glm::vec2> dropPoint = viewport_.takeDropPoint();
     for (const QString& path : paths) {
+        const std::filesystem::path file = toPath(path);
         if (isModelPath(path)) {
-            queue_.push_back(Job{JobKind::Model, {path}, switchMode});
-        } else if (isImageFile(toPath(path))) {
-            images << path;
+            queue_.push_back(Job{JobKind::Model, {path}, switchMode, dropPoint});
+        } else if (isImageFile(file)) {
+            images << path; // loose images together make one material
+        } else if (import::isTextureSource(file)) {
+            // A downloaded pack (zip or folder) is one material of its own.
+            queue_.push_back(Job{JobKind::TextureSet, {path}, switchMode, {}});
         } else {
             skipped << QFileInfo(path).fileName();
         }
     }
     if (!images.isEmpty()) {
-        queue_.push_back(Job{JobKind::TextureSet, images, switchMode});
+        queue_.push_back(Job{JobKind::TextureSet, images, switchMode, {}});
     }
     if (!skipped.isEmpty()) {
         emit statusMessage(tr("Skipped %1: LightBox can't import this kind of file yet.")
@@ -385,7 +362,7 @@ void ImportPanel::chooseTextureSet() {
     QSettings settings;
     const QStringList files = QFileDialog::getOpenFileNames(
         this, tr("Material from Textures"), settings.value(kLastDirectoryKey).toString(),
-        tr("Images (%1)").arg(patterns(imageFileExtensions())));
+        tr("Texture images or downloaded packs (%1 *.zip)").arg(patterns(imageFileExtensions())));
     if (files.isEmpty()) {
         return;
     }
@@ -554,8 +531,37 @@ void ImportPanel::addModel(const Job& job, import::ImportedModel model) {
     updating_ = false;
     refreshDetails();
 
+    // Stand it upright when the file can't say which way is up, then set it on the ground: where it
+    // was dropped, else beside what is already there (1 m apart), else at the origin.
+    bool stoodUp = false;
+    if (!model.axesFromFile) {
+        if (const std::optional<glm::quat> turn = uprightCorrection(scene_, added.root)) {
+            Transform transform = scene_.entity(added.root)->transform;
+            transform.rotation = glm::normalize(*turn * transform.rotation);
+            scene_.setTransform(added.root, transform);
+            stoodUp = true;
+        }
+    }
+    glm::vec2 at(0.0f);
+    if (job.dropPoint) {
+        at = *job.dropPoint;
+    } else {
+        std::vector<EntityId> others;
+        for (const EntityId root : scene_.roots()) {
+            if (root != added.root) {
+                others.push_back(root);
+            }
+        }
+        const std::optional<Bounds> existing = worldBoundsOf(scene_, others);
+        const std::optional<Bounds> own = worldBoundsOf(scene_, {&added.root, 1});
+        if (existing && own) {
+            at = glm::vec2(existing->max.x + 1.0f + own->size().x * 0.5f, existing->center().y);
+        }
+    }
+    placeOnGround(scene_, added.root, at);
+
     selection_.select(added.root);
-    if (const std::optional<Bounds> bounds = modelBounds(added.root)) {
+    if (const std::optional<Bounds> bounds = worldBoundsOf(scene_, {&added.root, 1})) {
         viewport_.frameBounds(*bounds);
     }
     QString message =
@@ -565,6 +571,9 @@ void ImportPanel::addModel(const Job& job, import::ImportedModel model) {
                  ui::count(static_cast<int>(added.materialCount), tr("1 material"),
                            tr("%1 materials")),
                  QLocale().toString(added.seconds, 'f', 1));
+    if (stoodUp) {
+        message += tr(" · stood upright (the file doesn't say which way is up)");
+    }
     if (!added.warnings.isEmpty()) {
         message += tr(" · %1 (see Report)")
                        .arg(ui::count(static_cast<int>(added.warnings.size()), tr("1 warning"),
@@ -583,27 +592,7 @@ void ImportPanel::addTextureSet(const Job& job, const import::ImportedModel& mod
     }
 
     // Selected objects (and everything inside selected groups, e.g. an imported model) get it.
-    std::unordered_set<EntityId> targets;
-    std::vector<EntityId> ordered;
-    const std::vector<EntityId> selected(selection_.ids().begin(), selection_.ids().end());
-    for (const EntityId id : selected) {
-        for (const EntityId entity : subtree(scene_, id)) {
-            if (targets.insert(entity).second) {
-                ordered.push_back(entity);
-            }
-        }
-    }
-    int applied = 0;
-    for (const EntityId id : ordered) {
-        const Entity* entity = scene_.entity(id);
-        if (entity == nullptr || !entity->meshInstance) {
-            continue;
-        }
-        MeshInstance instance = *entity->meshInstance;
-        instance.material = material;
-        scene_.setMeshInstance(id, instance);
-        ++applied;
-    }
+    const auto applied = static_cast<int>(applyMaterial(scene_, selection_.ids(), material));
 
     const QString textures =
         ui::count(static_cast<int>(model.textures.size()), tr("1 texture"), tr("%1 textures"));
@@ -757,45 +746,6 @@ void ImportPanel::refreshDetails() {
     }
 }
 
-std::optional<Bounds> ImportPanel::modelBounds(EntityId root) const {
-    const Entity* rootEntity = scene_.entity(root);
-    if (rootEntity == nullptr) {
-        return std::nullopt;
-    }
-    std::optional<Bounds> result;
-    std::vector<std::pair<EntityId, glm::mat4>> pending{
-        {root, rootEntity->parent ? scene_.worldMatrix(rootEntity->parent) : glm::mat4(1.0f)}};
-    while (!pending.empty()) {
-        const auto [id, parentWorld] = pending.back();
-        pending.pop_back();
-        const Entity* entity = scene_.entity(id);
-        if (entity == nullptr) {
-            continue;
-        }
-        const glm::mat4 world = parentWorld * entity->transform.matrix();
-        if (entity->meshInstance) {
-            if (const MeshResource* mesh = scene_.mesh(entity->meshInstance->mesh)) {
-                for (int corner = 0; corner < 8; ++corner) {
-                    const glm::vec3 local((corner & 1) != 0 ? mesh->bounds.max.x : mesh->bounds.min.x,
-                                          (corner & 2) != 0 ? mesh->bounds.max.y : mesh->bounds.min.y,
-                                          (corner & 4) != 0 ? mesh->bounds.max.z : mesh->bounds.min.z);
-                    const glm::vec3 point(world * glm::vec4(local, 1.0f));
-                    if (!result) {
-                        result = Bounds{point, point};
-                    } else {
-                        result->min = glm::min(result->min, point);
-                        result->max = glm::max(result->max, point);
-                    }
-                }
-            }
-        }
-        for (const EntityId child : entity->children) {
-            pending.emplace_back(child, world);
-        }
-    }
-    return result;
-}
-
 void ImportPanel::setUnits(double metersPerUnit) {
     const Record* record = selectedRecord();
     const Entity* root = record != nullptr ? scene_.entity(record->root) : nullptr;
@@ -815,7 +765,7 @@ void ImportPanel::setYUp(bool yUp) {
     }
     // +90° about X turns the file's +Y into +Z. The model keeps its footprint center and stays on
     // the same ground level, so the turn doesn't send it underground.
-    const std::optional<Bounds> before = modelBounds(record->root);
+    const std::optional<Bounds> before = worldBoundsOf(scene_, {&record->root, 1});
     Transform transform = root->transform;
     const float angle = glm::radians(yUp ? 90.0f : -90.0f);
     transform.rotation =
@@ -823,7 +773,8 @@ void ImportPanel::setYUp(bool yUp) {
     record->yUp = yUp;
     updating_ = true;
     scene_.setTransform(record->root, transform);
-    if (const std::optional<Bounds> after = modelBounds(record->root); before && after) {
+    if (const std::optional<Bounds> after = worldBoundsOf(scene_, {&record->root, 1});
+        before && after) {
         const glm::vec3 offset(before->center().x - after->center().x,
                                before->center().y - after->center().y,
                                before->min.z - after->min.z);
@@ -835,7 +786,7 @@ void ImportPanel::setYUp(bool yUp) {
 
 void ImportPanel::frameSelected() {
     if (const Record* record = selectedRecord()) {
-        if (const std::optional<Bounds> bounds = modelBounds(record->root)) {
+        if (const std::optional<Bounds> bounds = worldBoundsOf(scene_, {&record->root, 1})) {
             viewport_.frameBounds(*bounds);
         }
     }
@@ -846,10 +797,7 @@ void ImportPanel::placeAtOrigin() {
     if (record == nullptr) {
         return;
     }
-    if (const std::optional<Bounds> bounds = modelBounds(record->root)) {
-        const glm::vec3 center = bounds->center();
-        moveBy(scene_, record->root, glm::vec3(-center.x, -center.y, -bounds->min.z));
-    }
+    placeOnGround(scene_, record->root, glm::vec2(0.0f));
 }
 
 void ImportPanel::removeSelected() {

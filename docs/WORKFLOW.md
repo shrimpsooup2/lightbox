@@ -57,7 +57,7 @@ The order follows the work: bring the design in, dress it, light it, shoot it.
 | Left panel | Drop zone, import queue with progress, recent sources, import report (units found, warnings), **Update model** for every linked source |
 | Tools | Plan underlays per storey, scale calibration (pick two points, type distance), plan-to-3D massing |
 | Properties | Settings of the selected imported source: units, up axis, origin offset, layer visibility |
-| Status | **today:** *Import model…* (Ctrl+I), *Material from textures…*, drop files anywhere (window or viewport); glTF/GLB, OBJ/MTL, FBX parsed in the background with progress + Cancel, several files queue up. Each model lands as one group (selected and framed); **Models** lists this session's imports; **Placement**: units (file or guessed, changeable live), Z-up/Y-up, Frame, Select, Place at origin, Remove (deletes only what that import created); **Report**: format, path, counts, time, units source, warnings. The first model replaces the sample house while it is the only content. Remaining: underlays/plans 1.7–1.8, more formats 1.4–1.6, Update model 1.13 |
+| Status | **today:** *Import model…* (Ctrl+I), *Material from textures…*, drop files anywhere (window or viewport); glTF/GLB, OBJ/MTL, FBX, Collada (.dae, SketchUp's free export), KMZ, 3DS, STL, PLY parsed in the background with progress + Cancel, several files queue up. Each model lands as one group, set on the ground where it was dropped (else beside what is already there, or at the origin), stood upright if the file can't say which way is up (OBJ, STL, PLY), then selected and framed with the move/rotate gizmo on it; **Models** lists this session's imports; **Placement**: units (file or guessed, changeable live), Z-up/Y-up, Frame, Select, Place at origin, Remove (deletes only what that import created); **Report**: format, path, counts, time, units source, warnings. Remaining: underlays/plans 1.7–1.8, Rhino/SketchUp/IFC 1.5–1.6, Update model 1.13 |
 
 ### Build (Ctrl+2) — "arrange and dress the scene"
 
@@ -66,7 +66,7 @@ The order follows the work: bring the design in, dress it, light it, shoot it.
 | Left panel | The **asset library** (furniture, people, vehicles, props) with drag-and-drop placement; Scene stays on the right |
 | Tools | Select, move/rotate/scale gizmos with snapping, place on surface, array, align, simple scatter |
 | Properties | Name, transform, material slot, asset info |
-| Status | **today:** "coming soon" card for the library plus a *Moving around* quick reference; editing via Scene + Properties. Library 1.10–1.12, tools 2.5 |
+| Status | **today:** "coming soon" card for the library plus a quick reference; click an object to select it; **gizmo** (also in Import): drag an arrow to move along X/Y/Z, the square to slide on the ground, a ring to turn, an end square to stretch along that axis, the white middle square to scale evenly; Shift snaps 0.1 m / 15° / 10 %; Properties for exact values. Library 1.10–1.12, undo 0.7, other tools 2.5 |
 
 ### Materials (Ctrl+3) — "make it look like what it is"
 
@@ -75,7 +75,7 @@ The order follows the work: bring the design in, dress it, light it, shoot it.
 | Left panel | **Materials in this project** (swatch, name, number of objects using it), material library (presets, CC0 packs) |
 | Tools | Apply to selection, select objects using a material, eyedropper, replace everywhere, real-world texture size |
 | Properties | Full material editor for the material of the selection (PBR parameters, texture slots, mapping) |
-| Status | **today:** action rows (New, From textures…, Apply to selected — works on groups/imported models, Select users, Delete unused); material list with texture thumbnails and usage; sections **Base** (name, color, color map), **Surface** (roughness/metalness + maps with channel/invert, Matte/Satin/Glossy/Metal/Polished presets), **Relief** (normal map, strength, DirectX flip), **Occlusion**, **Mapping** (UV / Box at real-world size, scale, rotation, offset); **Textures in project** grid with preview and *Remove unused*. Dropping texture images makes one PBR material (names like ambientCG / Poly Haven) and applies it to the selection. Remaining: preset library and material ball 2.8, eyedropper/replace everywhere 2.8, full model 3.3 |
+| Status | **today:** action rows (New, From textures…, Apply to selected — works on groups/imported models, Select users, Delete unused); material list with texture thumbnails and usage; sections **Base** (name, color, color map), **Surface** (roughness/metalness + maps with channel/invert, Matte/Satin/Glossy/Metal/Polished presets), **Relief** (normal map, strength, DirectX flip), **Occlusion**, **Mapping** (UV / Box at real-world size, scale, rotation, offset); **Textures in project** grid with preview and *Remove unused*. **Texture library…** (top button) searches ambientCG and Poly Haven (CC0) with category quick-searches and a 1K/2K/4K choice; one click downloads the set into the local library, makes a material at its real-world size and applies it to the selection (groups included). Dropping texture images, a downloaded pack (.zip) or a folder makes one PBR material (ambientCG, Poly Haven and Poliigon naming) and applies it to the selection. Mapping has one-click tile sizes (0.5–5 m), **Variation** (hides the repeating grid of tiled textures from a distance; 0.5 for downloaded sets) and **Rotate each tile randomly** (off by default; for stone, concrete, plaster, ground; not for bricks or planks). Clicking an object in the viewport selects it and shows its material. Remaining: preset library and material ball 2.8, eyedropper/replace everywhere 2.8, full model 3.3 |
 
 ### Site (Ctrl+4) — "put it in its place"
 
@@ -90,19 +90,25 @@ The order follows the work: bring the design in, dress it, light it, shoot it.
 
 | | |
 | --- | --- |
-| Left panel | Time-of-day presets, **Sun** (manual direction, or real position from location, date and time), **Location** (city, latitude/longitude, UTC offset, true north), **Sunlight** (strength, color temperature, sky light), **Shadows**; later artificial lights and IES profiles. Sky look and backdrop come from **Environments** (see below), not from color pickers here |
-| Tools | Place lights, aim lights, light groups / light mix |
+| Left panel | Time-of-day presets, **Lights** (add a bulb, spot or panel at the view's focus; edit the selected light: brightness in lumens, color in Kelvin, size, beam), **Sky** (automatic, or a **sky image**: an `.hdr` panorama chosen here or dropped on the viewport, turned with *Turn*; its sun is found and takes over the sun's direction and color), **Sun** (manual direction, or real position from location, date and time; replaced by a note while a sky image is used), **Location** (city, latitude/longitude, UTC offset, true north), **Sunlight** (strength, color temperature, sky light), **Shadows**; later IES profiles |
+| Tools | Place lights, aim lights (move/rotate gizmo on the selected light), light groups / light mix |
 | Properties | Settings of the selected light |
-| Status | **today:** all of the left panel above, live in the viewport, in collapsible sections. Presets are smart in location mode (sunrise, golden hour and dusk are computed for the chosen date). Physical sky 3.4, weather 5.4, Environments 5.7 |
+| Status | **today:** all of the left panel above, live in the viewport, in collapsible sections. Presets are smart in location mode (sunrise, golden hour and dusk are computed for the chosen date). Light icons in the viewport are clickable. Physical sky 3.4, weather 5.4, Environments 5.7 |
 
 ### Render (Ctrl+6) — "make the images"
 
 | | |
 | --- | --- |
-| Left panel | Look presets, **Camera** (lens in mm with quick 18/24/35/50/85, two-point perspective, eye level, frame all), **Image** (exposure, tone mapping, contrast, saturation, warmth, vignette, clay model), **Save image**; later Views (saved cameras with thumbnails), render queue, panoramas, animations and sun studies |
+| Left panel | **Render image…** (opens the render screen, below), look presets, **Ray tracing** (photoreal on/off, also `R`; Quality Draft/Good/Final/Ultra; Speed Gentle/Balanced/Fast; progress bar with samples, elapsed time and time left), **Camera** (lens in mm with quick 18/24/35/50/85, two-point perspective, eye level, frame all), **Image** (auto exposure, exposure, tone mapping incl. AgX, contrast, saturation, warmth, vignette, clay model), **Save image**; later Views (saved cameras with thumbnails), render queue, panoramas, animations and sun studies |
 | Tools | Live/Final switch, safe frames, batch render |
 | Properties | Settings of the selected view (camera, time of day, style, aspect) |
-| Status | **today:** everything listed for the left panel except Views and later items. Views 2.9, Final engine 3.10, output 3.12, styles 3.13, animation 3.14 |
+| Status | **today:** everything listed for the left panel except Views and later items; the status bar also shows ray tracing progress and time left in every mode. A dedicated render screen (Lumion-style) is planned with output 3.12. Views 2.9, Final engine 3.10, styles 3.13, animation 3.14 |
+
+**Render screen** (File ▸ Render Image…, Ctrl+Shift+R, or *Render image…* in the Render panel; D-029):
+replaces the workspace like the start screen does. The image of the current view fills in on the left;
+on the right: Size (View, HD, Full HD, 4K), Quality, Speed, **Render**/Stop, progress with time left,
+**Save image…** (PNG/JPEG, also mid-render), *Back to editing* (Esc). Renders offscreen, so covering
+the window or switching apps doesn't pause it.
 
 ## 4. Workspaces (custom layouts)
 
@@ -193,7 +199,12 @@ Must be defensible: solar position from a published algorithm, true north explic
 - **Properties** adapts to the mode: in Materials it opens the selection's material editor first, in
   Light the selected light, in Render the selected view.
 - **Undo/redo** spans all modes (0.7). **How-to tips** (2.1b) explain every tool in place.
-- **Drop files** → Import mode + import; **double-click an object** in the viewport → Properties (0.7 picking).
+- **Drop files** → Import mode + import; **click an object** in the viewport selects it (today, CPU raycast;
+  Properties and the Materials editor follow); **double-click** → Properties (0.7).
+- **Orbit modes** (viewport toolbar, every mode, remembered): orbit around the model, around the point
+  under the cursor (SketchUp-style), or look around from where the camera stands.
+- **Walk** (viewport toolbar, every mode): click where to stand, W A S D / arrows to move, drag to look,
+  Shift runs, Q/E down/up, Esc stops. Eye height 1.6 m; you slide along walls instead of passing through.
 
 ## 8. How to extend
 

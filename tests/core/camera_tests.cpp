@@ -51,3 +51,31 @@ TEST_CASE("framing centers the bounds and fits them in view") {
     const float radius = glm::length(bounds.size()) * 0.5f;
     CHECK(camera.distance() * std::sin(camera.verticalFov() * 0.5f) >= radius);
 }
+
+TEST_CASE("orbiting around a point keeps that point fixed on screen") {
+    OrbitCamera camera;
+    camera.setState(CameraState{{2.0f, 1.0f, 0.5f}, 20.0f, 0.7f, 0.4f, 35.0f, false});
+    const glm::vec3 pivot{6.0f, -3.0f, 2.0f}; // off-center, not the orbit target
+    const auto screen = [&] {
+        const glm::vec4 clip = camera.projectionMatrix(1.5f) * camera.viewMatrix() *
+                               glm::vec4(pivot, 1.0f);
+        return glm::vec3(clip) / clip.w;
+    };
+    const glm::vec3 before = screen();
+    const float reach = glm::length(camera.position() - pivot);
+
+    camera.orbitAround(pivot, 0.9f, -0.3f);
+    CHECK(camera.state().yawRadians == doctest::Approx(1.6f));
+    CHECK(camera.state().pitchRadians == doctest::Approx(0.1f));
+    const glm::vec3 after = screen();
+    CHECK(after.x == doctest::Approx(before.x).epsilon(1e-4));
+    CHECK(after.y == doctest::Approx(before.y).epsilon(1e-4));
+    CHECK(after.z == doctest::Approx(before.z).epsilon(1e-4)); // same depth: same distance
+    CHECK(glm::length(camera.position() - pivot) == doctest::Approx(reach));
+
+    // Pitch stops at the limit; the pivot still stays put rather than the view jumping.
+    camera.orbitAround(pivot, 0.0f, 10.0f);
+    const glm::vec3 clamped = screen();
+    CHECK(clamped.x == doctest::Approx(before.x).epsilon(1e-3));
+    CHECK(clamped.y == doctest::Approx(before.y).epsilon(1e-3));
+}

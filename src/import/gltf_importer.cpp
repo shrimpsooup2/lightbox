@@ -469,9 +469,26 @@ void GltfReader::convertMaterials() {
             material.textureOffset = {transform.offset[0], transform.offset[1]};
             material.textureRotationDegrees = glm::degrees(transform.rotation);
         }
-        if (source.alpha_mode != cgltf_alpha_mode_opaque) {
-            warnOnce(model_, std::format("Transparency in {} is not supported yet; transparent "
-                                         "materials are shown opaque.",
+        // See-through materials become glass: KHR_materials_transmission as authored, and
+        // alpha-blended materials (how most exporters write windows) by their opacity.
+        const float alpha = source.has_pbr_metallic_roughness || !source.has_pbr_specular_glossiness
+                                ? source.pbr_metallic_roughness.base_color_factor[3]
+                                : source.pbr_specular_glossiness.diffuse_factor[3];
+        if (source.has_transmission) {
+            material.transmission = std::clamp(source.transmission.transmission_factor, 0.0f, 1.0f);
+            material.thinWalled = !source.has_volume || source.volume.thickness_factor <= 0.0f;
+        } else if (source.alpha_mode == cgltf_alpha_mode_blend && alpha < 0.95f) {
+            // Glossy and see-through: window glass. Otherwise translucent (curtains, frosted
+            // panels): part of the light passes.
+            material.transmission = material.roughness < 0.3f ? 1.0f : 1.0f - alpha;
+            material.thinWalled = true;
+        }
+        if (source.has_ior) {
+            material.ior = std::clamp(source.ior.ior, 1.0f, 3.0f);
+        }
+        if (source.alpha_mode == cgltf_alpha_mode_mask) {
+            warnOnce(model_, std::format("Cut-out transparency (leaves, fences) in {} is not "
+                                         "supported yet; those surfaces are shown solid.",
                                          fileName_));
         }
         model_.materials.push_back(std::move(imported));

@@ -42,6 +42,8 @@ private:
 void importGltf(const std::filesystem::path& path, ImportedModel& model, const Job& job);
 void importObj(const std::filesystem::path& path, ImportedModel& model, const Job& job);
 void importFbx(const std::filesystem::path& path, ImportedModel& model, const Job& job);
+// Collada (.dae, .kmz), 3DS, STL and PLY through Assimp.
+void importAssimp(const std::filesystem::path& path, ImportedModel& model, const Job& job);
 
 // UTF-8 <-> std::filesystem::path without going through the Windows ANSI code page.
 std::filesystem::path pathFromUtf8(std::string_view utf8);
@@ -96,5 +98,15 @@ private:
 
 // Adds `warning` to the model unless the same text is already there (per-mesh issues repeat).
 void warnOnce(ImportedModel& model, std::string warning);
+
+// For formats without units (OBJ, STL, PLY, often 3DS). Architecture exports are usually meters,
+// centimeters or millimeters; a building or room in meters rarely exceeds 500 m, in centimeters 5000
+// units (50 m) — so the largest extent picks the unit: > 5000 → millimeters, > 500 → centimeters,
+// otherwise meters.
+struct UnitGuess {
+    double metersPerUnit;
+    std::string_view name;
+};
+UnitGuess guessUnits(float largestExtent);
 
 } // namespace lb::import::detail

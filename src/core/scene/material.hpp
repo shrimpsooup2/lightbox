@@ -37,14 +37,33 @@ struct Material {
     TextureSlot metalnessMap;  // linear; multiplied with metalness
     TextureSlot normalMap;     // tangent space, OpenGL convention (green = +Y)
     TextureSlot occlusionMap;  // linear ambient occlusion; darkens sky/fill light only
+    TextureSlot heightMap;     // linear height (white = high): parallax relief, see heightDepth
     float normalStrength = 1.0f;
     bool normalFlipY = false; // DirectX-convention normal maps (green = −Y)
+    // Relief depth of the height map in meters (white to black), e.g. 0.02 for brick mortar.
+    // 0 = flat.
+    float heightDepth = 0.0f;
 
     TextureMapping mapping = TextureMapping::UV;
     // UV mapping: repeats per UV unit. Box mapping: real-world size of one texture tile in meters.
     glm::vec2 textureScale{1.0f};
     float textureRotationDegrees = 0.0f;
     glm::vec2 textureOffset{0.0f}; // in tiles
+    // 0…1: gentle brightness/roughness variation across many tiles, so a tiled texture doesn't
+    // show an obvious repeating grid from a distance (the pattern itself is not shifted).
+    float variation = 0.0f;
+    // Turn and shift every tile at random (soft blends at tile borders) so no repeat shows. For
+    // directionless textures (stone, concrete, plaster, ground); breaks bricks, planks and joints.
+    bool randomTileRotation = false;
+
+    // Glass and other see-through surfaces: 0 = opaque, 1 = clear. Light passing through is tinted
+    // by the base color; roughness frosts it.
+    float transmission = 0.0f;
+    float ior = 1.5f;        // index of refraction: glass 1.5, water 1.33, acrylic 1.49
+    bool thinWalled = true;  // single panes (window glass): light passes straight through, no lens
+    // Glowing surfaces (lamp shades, LED strips, screens): luminance in nits (cd/m²), 0 = off.
+    glm::vec3 emissionColor{1.0f}; // linear RGB
+    float emissionStrength = 0.0f;
 
     bool operator==(const Material&) const = default;
 };

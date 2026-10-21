@@ -4,11 +4,27 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <format>
+#include <fstream>
 #include <map>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+#pragma GCC diagnostic ignored "-Wuseless-cast"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+#include <miniz.h>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #include "import/formats.hpp"
 #include "import/importer.hpp"
@@ -50,7 +66,7 @@ struct TokenKind {
     MapKind kind;
 };
 
-constexpr std::array<TokenKind, 29> kTokens = {{
+constexpr std::array<TokenKind, 49> kTokens = {{
     {"albedo", MapKind::BaseColor},
     {"basecolor", MapKind::BaseColor},
     {"diffuse", MapKind::BaseColor},
@@ -80,9 +96,29 @@ constexpr std::array<TokenKind, 29> kTokens = {{
     {"bump", MapKind::Height},
     {"arm", MapKind::PackedOcclusionRoughnessMetalness},
     {"orm", MapKind::PackedOcclusionRoughnessMetalness},
+    {"refl", MapKind::Specular},
+    {"reflection", MapKind::Specular},
+    {"specular", MapKind::Specular},
+    {"spec", MapKind::Specular},
+    {"opacity", MapKind::Opacity},
+    {"alpha", MapKind::Opacity},
+    {"alphamasked", MapKind::Opacity},
+    {"mask", MapKind::Opacity},
+    {"sss", MapKind::Other},
+    {"subsurface", MapKind::Other},
+    {"transmission", MapKind::Other},
+    {"translucency", MapKind::Other},
+    {"sheen", MapKind::Other},
+    {"fuzz", MapKind::Other},
+    {"emission", MapKind::Other},
+    {"emissive", MapKind::Other},
+    {"idmap", MapKind::Other},
+    {"cavity", MapKind::Other},
+    {"curvature", MapKind::Other},
+    {"preview", MapKind::Other},
 }};
 
-MapKind tokenKind(std::string_view token) {
+MapKind exactTokenKind(std::string_view token) {
     for (const TokenKind& entry : kTokens) {
         if (entry.token == token) {
             return entry.kind;
@@ -91,11 +127,53 @@ MapKind tokenKind(std::string_view token) {
     return MapKind::Unknown;
 }
 
+MapKind tokenKind(std::string_view token) {
+    if (const MapKind kind = exactTokenKind(token); kind != MapKind::Unknown) {
+        return kind;
+    }
+    // 16/32-bit variants: Poliigon's "NRM16", "DISP16".
+    for (const std::string_view depth : {std::string_view("16"), std::string_view("32")}) {
+        if (token.size() > depth.size() + 1 && token.ends_with(depth)) {
+            return exactTokenKind(token.substr(0, token.size() - depth.size()));
+        }
+    }
+    return MapKind::Unknown;
+}
+
+// "1k", "2K", "16k": a resolution part of a file name.
+bool isResolutionToken(std::string_view token) {
+    return token.size() >= 2 && (token.back() == 'k') &&
+           std::all_of(token.begin(), token.end() - 1,
+                       [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; });
+}
+
 MapKind classifyTokens(const std::vector<std::string>& tokens) {
+    std::size_t count = tokens.size();
+    // Poliigon's workflow marker ("…_COL_8K_METALNESS"): a trailing METALNESS/SPECULAR after a
+    // resolution, with the real map name before the resolution. ambientCG puts the map name after
+    // the resolution ("Metal032_1K-PNG_Metalness"), which this leaves alone.
+    if (count >= 3 && (tokens.back() == "metalness" || tokens.back() == "specular") &&
+        isResolutionToken(tokens[count - 2])) {
+        for (std::size_t i = 0; i + 2 < count; ++i) {
+            if (tokenKind(tokens[i]) != MapKind::Unknown) {
+                --count;
+                break;
+            }
+        }
+    }
     MapKind kind = MapKind::Unknown;
     bool directX = false;
-    for (const std::string& token : tokens) {
-        if (const MapKind k = tokenKind(token); k != MapKind::Unknown) {
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::string& token = tokens[i];
+        const std::string_view previous = i > 0 ? std::string_view(tokens[i - 1]) : "";
+        MapKind k = tokenKind(token);
+        if (token == "color" && (previous == "sheen" || previous == "subsurface" ||
+                                 previous == "emission" || previous == "emissive")) {
+            k = MapKind::Other; // "SheenColor": a sheen map, not the base color
+        } else if (token == "opacity" && previous == "color") {
+            k = MapKind::BaseColor; // Poliigon "BaseColorOpacity": base color with alpha
+        }
+        if (k != MapKind::Unknown) {
             kind = k;
         }
         directX = directX || token == "dx" || token == "directx";
@@ -106,10 +184,11 @@ MapKind classifyTokens(const std::vector<std::string>& tokens) {
 // Tokens that end a set name without belonging to it: resolutions, formats, map names, qualifiers.
 bool isNoiseToken(const std::string& token) {
     // "base" is the first half of a camelCase "BaseColor" once "Color" is gone.
-    static constexpr std::array<std::string_view, 22> kNoise = {
-        "1k",  "2k",   "3k",  "4k",  "6k", "8k", "16k",    "png",     "jpg", "jpeg", "tga",
-        "tif", "tiff", "exr", "bmp", "gl", "dx", "opengl", "directx", "map", "maps", "base"};
-    if (std::find(kNoise.begin(), kNoise.end(), token) != kNoise.end()) {
+    static constexpr std::array<std::string_view, 19> kNoise = {
+        "png", "jpg", "jpeg", "tga",    "tif",     "tiff",      "exr",       "bmp",  "gl", "dx",
+        "opengl", "directx", "map", "maps", "base", "metalness", "specular", "var1", "var2"};
+    if (isResolutionToken(token) ||
+        std::find(kNoise.begin(), kNoise.end(), token) != kNoise.end()) {
         return true;
     }
     return tokenKind(token) != MapKind::Unknown;
@@ -134,6 +213,11 @@ std::string_view mapKindName(MapKind kind) {
         return "height";
     case MapKind::PackedOcclusionRoughnessMetalness:
         return "packed AO/roughness/metalness";
+    case MapKind::Specular:
+        return "specular";
+    case MapKind::Opacity:
+        return "opacity";
+    case MapKind::Other:
     case MapKind::Unknown:
         break;
     }
@@ -147,6 +231,141 @@ bool endsOnBoundary(std::string_view stem, std::size_t length) {
     }
     return isSeparator(stem[length - 1]) || isSeparator(stem[length]) ||
            (isLower(stem[length - 1]) && isUpper(stem[length]));
+}
+
+// Archive entries larger than this are refused (a 16K PNG is ~1 GB; nothing usable is bigger).
+constexpr mz_uint64 kMaxEntryBytes = mz_uint64{1} << 30;
+
+// Reads a zip archive through a stream, so non-ASCII Windows paths work (miniz's own file functions
+// use the narrow fopen). Must not move after construction: miniz keeps a pointer to it.
+class ZipReader {
+public:
+    explicit ZipReader(std::filesystem::path path) : path_(std::move(path)) {
+        stream_.open(path_, std::ios::binary | std::ios::ate);
+        if (!stream_) {
+            throw ImportError(std::format("Could not open {}.", detail::displayName(path_)));
+        }
+        const std::streamoff size = stream_.tellg();
+        mz_zip_zero_struct(&zip_);
+        zip_.m_pRead = &ZipReader::readAt;
+        zip_.m_pIO_opaque = this;
+        if (size <= 0 || !mz_zip_reader_init(&zip_, static_cast<mz_uint64>(size), 0)) {
+            throw ImportError(std::format("{} is not a zip archive LightBox can read.",
+                                          detail::displayName(path_)));
+        }
+        open_ = true;
+    }
+    ~ZipReader() {
+        if (open_) {
+            mz_zip_reader_end(&zip_);
+        }
+    }
+    ZipReader(const ZipReader&) = delete;
+    ZipReader& operator=(const ZipReader&) = delete;
+
+    const std::filesystem::path& path() const { return path_; }
+
+    // Image entries (index, name), sorted by name; macOS resource forks are skipped.
+    std::vector<std::pair<mz_uint, std::string>> imageEntries() {
+        std::vector<std::pair<mz_uint, std::string>> entries;
+        const mz_uint count = mz_zip_reader_get_num_files(&zip_);
+        for (mz_uint i = 0; i < count; ++i) {
+            if (mz_zip_reader_is_file_a_directory(&zip_, i)) {
+                continue;
+            }
+            const mz_uint length = mz_zip_reader_get_filename(&zip_, i, nullptr, 0);
+            std::string name(length, '\0');
+            mz_zip_reader_get_filename(&zip_, i, name.data(), length);
+            name.resize(length > 0 ? length - 1 : 0);
+            if (name.starts_with("__MACOSX/") || !isImageFile(detail::pathFromUtf8(name))) {
+                continue;
+            }
+            entries.emplace_back(i, std::move(name));
+        }
+        std::sort(entries.begin(), entries.end(),
+                  [](const auto& a, const auto& b) { return a.second < b.second; });
+        return entries;
+    }
+
+    std::vector<std::uint8_t> read(mz_uint index, const std::string& name) {
+        mz_zip_archive_file_stat stat{};
+        if (!mz_zip_reader_file_stat(&zip_, index, &stat) || stat.m_uncomp_size > kMaxEntryBytes) {
+            throw ImportError(std::format("{} in {} can't be read.", name,
+                                          detail::displayName(path_)));
+        }
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(stat.m_uncomp_size));
+        if (!mz_zip_reader_extract_to_mem(&zip_, index, bytes.data(), bytes.size(), 0)) {
+            throw ImportError(std::format("{} in {} is damaged.", name, detail::displayName(path_)));
+        }
+        return bytes;
+    }
+
+private:
+    static std::size_t readAt(void* opaque, mz_uint64 offset, void* buffer, std::size_t size) {
+        auto* self = static_cast<ZipReader*>(opaque);
+        self->stream_.clear();
+        self->stream_.seekg(static_cast<std::streamoff>(offset));
+        self->stream_.read(static_cast<char*>(buffer), static_cast<std::streamsize>(size));
+        return static_cast<std::size_t>(self->stream_.gcount());
+    }
+
+    std::filesystem::path path_;
+    std::ifstream stream_;
+    mz_zip_archive zip_;
+    bool open_ = false;
+};
+
+// One image of a texture set: a loose file, or an entry of an open archive.
+struct ImageSource {
+    std::filesystem::path path; // the file, or the entry name (for classification and messages)
+    ZipReader* archive = nullptr;
+    mz_uint index = 0;
+    std::string entry;
+};
+
+std::vector<ImageSource> gatherSources(std::span<const std::filesystem::path> inputs,
+                                       std::vector<std::unique_ptr<ZipReader>>& archives,
+                                       std::vector<std::string>& warnings, const detail::Job& job) {
+    std::vector<ImageSource> sources;
+    for (const std::filesystem::path& input : inputs) {
+        job.checkCancelled();
+        const std::string name = detail::displayName(input);
+        std::error_code error;
+        if (std::filesystem::is_directory(input, error)) {
+            std::vector<std::filesystem::path> images;
+            const auto options = std::filesystem::directory_options::skip_permission_denied;
+            for (auto it = std::filesystem::recursive_directory_iterator(input, options, error);
+                 !error && it != std::filesystem::recursive_directory_iterator();
+                 it.increment(error)) {
+                if (it->is_regular_file(error) && isImageFile(it->path())) {
+                    images.push_back(it->path());
+                }
+            }
+            std::sort(images.begin(), images.end());
+            if (images.empty()) {
+                warnings.push_back(std::format("The folder {} has no images LightBox can read.", name));
+            }
+            for (std::filesystem::path& image : images) {
+                sources.push_back({std::move(image), nullptr, 0, {}});
+            }
+        } else if (detail::toLowerAscii(detail::pathToUtf8(input.extension())) == ".zip") {
+            auto archive = std::make_unique<ZipReader>(input);
+            const auto entries = archive->imageEntries();
+            if (entries.empty()) {
+                warnings.push_back(std::format("{} has no images LightBox can read.", name));
+            }
+            for (const auto& [index, entry] : entries) {
+                sources.push_back({detail::pathFromUtf8(entry), archive.get(), index, entry});
+            }
+            archives.push_back(std::move(archive));
+        } else if (isImageFile(input)) {
+            sources.push_back({input, nullptr, 0, {}});
+        } else {
+            warnings.push_back(
+                std::format("{} is not an image LightBox can read; it was ignored.", name));
+        }
+    }
+    return sources;
 }
 
 } // namespace
@@ -207,7 +426,19 @@ std::string textureSetName(std::span<const std::filesystem::path> files) {
         }
         name.resize(start);
     }
+    // Poliigon's newer names start with the brand: "Poliigon_BrickReclaimedCommon_8442".
+    if (name.size() > 9 && detail::toLowerAscii(std::string_view(name).substr(0, 9)) == "poliigon_") {
+        name.erase(0, 9);
+    }
     return name.empty() ? "Material" : name;
+}
+
+bool isTextureSource(const std::filesystem::path& path) {
+    std::error_code error;
+    if (std::filesystem::is_directory(path, error)) {
+        return true;
+    }
+    return isImageFile(path) || detail::toLowerAscii(detail::pathToUtf8(path.extension())) == ".zip";
 }
 
 ImportedModel importTextureSet(std::span<const std::filesystem::path> files,
@@ -219,39 +450,57 @@ ImportedModel importTextureSet(std::span<const std::filesystem::path> files,
     }
 
     ImportedModel model;
-    model.name = textureSetName(files);
     model.format = "Texture set";
-    model.sourcePath = detail::pathToUtf8(files.front().parent_path());
+    model.sourcePath = detail::pathToUtf8(files.size() == 1 && !isImageFile(files.front())
+                                              ? files.front()
+                                              : files.front().parent_path());
     model.unitsFromFile = true;
 
-    std::map<MapKind, std::filesystem::path> chosen;
-    for (const std::filesystem::path& file : files) {
-        const std::string name = detail::displayName(file);
-        if (!isImageFile(file)) {
-            model.warnings.push_back(
-                std::format("{} is not an image LightBox can read; it was ignored.", name));
-            continue;
-        }
-        const MapKind kind = classifyTextureFile(file);
-        if (kind == MapKind::Unknown) {
+    // Archives stay open while their images are read.
+    std::vector<std::unique_ptr<ZipReader>> archives;
+    std::vector<ImageSource> sources = gatherSources(files, archives, model.warnings, job);
+    std::vector<std::filesystem::path> names;
+    names.reserve(sources.size());
+    for (const ImageSource& source : sources) {
+        names.push_back(source.path);
+    }
+    model.name = textureSetName(names);
+
+    std::map<MapKind, const ImageSource*> chosen;
+    for (const ImageSource& source : sources) {
+        const std::string name = detail::displayName(source.path);
+        const MapKind kind = classifyTextureFile(source.path);
+        switch (kind) {
+        case MapKind::Unknown:
             model.warnings.push_back(std::format("{} was ignored: its name doesn't say which map it "
                                                  "is (like _Color, _Normal or _Roughness).",
                                                  name));
             continue;
-        }
-        if (kind == MapKind::Height) {
+        case MapKind::Specular:
+            model.warnings.push_back(std::format("{} is a specular-workflow map; LightBox uses the "
+                                                 "roughness/metalness maps instead.",
+                                                 name));
+            continue;
+        case MapKind::Opacity:
             model.warnings.push_back(std::format(
-                "{} is a height map; it was ignored because displacement isn't supported yet.",
+                "{} is an opacity (cut-out) map; it was ignored because cut-outs aren't supported "
+                "yet.",
                 name));
             continue;
+        case MapKind::Other:
+            model.warnings.push_back(std::format("{} isn't used by LightBox yet; it was ignored.",
+                                                 name));
+            continue;
+        default:
+            break;
         }
         if (const auto it = chosen.find(kind); it != chosen.end()) {
             model.warnings.push_back(std::format("{} was ignored because {} is already the {} map.",
-                                                 name, detail::displayName(it->second),
+                                                 name, detail::displayName(it->second->path),
                                                  mapKindName(kind)));
             continue;
         }
-        chosen.emplace(kind, file);
+        chosen.emplace(kind, &source);
     }
     const auto has = [&](MapKind kind) { return chosen.contains(kind); };
     // With both conventions present, the OpenGL map matches LightBox directly.
@@ -260,7 +509,7 @@ ImportedModel importTextureSet(std::span<const std::filesystem::path> files,
     }
     if (has(MapKind::Gloss) && has(MapKind::Roughness)) {
         model.warnings.push_back(std::format("{} was ignored because the set has a roughness map.",
-                                             detail::displayName(chosen.at(MapKind::Gloss))));
+                                             detail::displayName(chosen.at(MapKind::Gloss)->path)));
         chosen.erase(MapKind::Gloss);
     }
     const bool packedNeeded =
@@ -281,14 +530,26 @@ ImportedModel importTextureSet(std::span<const std::filesystem::path> files,
         }
         job.report(loaded / total, "Loading textures");
         loaded += 1.0f;
-        return textures.fromFile(it->second);
+        const ImageSource& source = *it->second;
+        if (source.archive == nullptr) {
+            return textures.fromFile(source.path);
+        }
+        const std::string name = detail::displayName(source.path);
+        const std::string key = detail::pathToUtf8(source.archive->path()) + "|" + source.entry;
+        try {
+            const std::vector<std::uint8_t> bytes = source.archive->read(source.index, name);
+            return textures.fromMemory(key, bytes, name);
+        } catch (const ImportError& e) {
+            return textures.fail(key, e.what());
+        }
     };
 
     ImportedMaterial imported;
     imported.name = model.name;
     Material& material = imported.material;
     material.mapping = TextureMapping::Box;
-    material.textureScale = glm::vec2(1.0f); // one tile per meter
+    material.textureScale = glm::vec2(kDefaultTextureTileMeters);
+    material.variation = 0.5f; // texture sets tile; hide the repeat from a distance by default
 
     imported.baseColor.texture = load(MapKind::BaseColor);
     if (imported.baseColor.texture >= 0) {
@@ -314,6 +575,10 @@ ImportedModel importTextureSet(std::span<const std::filesystem::path> files,
     } else if (packed >= 0) {
         imported.metalness = {packed, 2, false};
     }
+    if (const int height = load(MapKind::Height); height >= 0) {
+        imported.height = {height, 0, false};
+        material.heightDepth = 0.02f; // typical mortar/joint depth; adjustable per material
+    }
     if (const int occlusion = load(MapKind::Occlusion); occlusion >= 0) {
         imported.occlusion = {occlusion, 0, false};
     } else if (packed >= 0) {
@@ -329,7 +594,7 @@ ImportedModel importTextureSet(std::span<const std::filesystem::path> files,
 
     const bool any = imported.baseColor.texture >= 0 || imported.normal.texture >= 0 ||
                      imported.roughness.texture >= 0 || imported.metalness.texture >= 0 ||
-                     imported.occlusion.texture >= 0;
+                     imported.occlusion.texture >= 0 || imported.height.texture >= 0;
     if (!any) {
         throw ImportError(model.warnings.empty()
                               ? std::string("None of the files is a texture map LightBox can use.")

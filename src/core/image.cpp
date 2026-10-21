@@ -73,7 +73,9 @@ ImageData decodeImage(std::span<const std::uint8_t> encoded, std::string_view na
     return image;
 }
 
-ImageData loadImage(const std::filesystem::path& path) {
+namespace {
+
+std::vector<std::uint8_t> readImageFile(const std::filesystem::path& path) {
     const std::string name = path.filename().string();
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file) {
@@ -83,12 +85,40 @@ ImageData loadImage(const std::filesystem::path& path) {
     if (size <= 0) {
         throw std::runtime_error(std::format("The image {} is empty.", name));
     }
+    if (size > static_cast<std::streamsize>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::format("The image {} is too large to decode.", name));
+    }
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
     file.seekg(0);
     if (!file.read(reinterpret_cast<char*>(bytes.data()), size)) {
         throw std::runtime_error(std::format("Could not read the image {}.", path.string()));
     }
-    return decodeImage(bytes, name);
+    return bytes;
+}
+
+} // namespace
+
+ImageData loadImage(const std::filesystem::path& path) {
+    return decodeImage(readImageFile(path), path.filename().string());
+}
+
+FloatImage loadFloatImage(const std::filesystem::path& path) {
+    const std::vector<std::uint8_t> bytes = readImageFile(path);
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    float* decoded = stbi_loadf_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width,
+                                            &height, &channels, STBI_rgb);
+    if (decoded == nullptr) {
+        throw std::runtime_error(std::format("Could not read the image {} ({}).",
+                                             path.filename().string(), stbi_failure_reason()));
+    }
+    FloatImage image;
+    image.width = static_cast<std::uint32_t>(width);
+    image.height = static_cast<std::uint32_t>(height);
+    image.pixels.assign(decoded, decoded + std::size_t{image.width} * image.height * 3);
+    stbi_image_free(decoded);
+    return image;
 }
 
 std::span<const std::string_view> imageFileExtensions() {

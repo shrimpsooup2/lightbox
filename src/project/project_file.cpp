@@ -305,6 +305,7 @@ std::string_view enumName(ToneMapping mapping) {
     case ToneMapping::Filmic: return "filmic";
     case ToneMapping::Neutral: return "neutral";
     case ToneMapping::None: return "none";
+    case ToneMapping::AgX: return "agx";
     }
     throw std::logic_error("unknown ToneMapping");
 }
@@ -315,6 +316,15 @@ std::string_view enumName(TextureMapping mapping) {
     case TextureMapping::Box: return "box";
     }
     throw std::logic_error("unknown TextureMapping");
+}
+
+std::string_view enumName(LightType type) {
+    switch (type) {
+    case LightType::Point: return "point";
+    case LightType::Spot: return "spot";
+    case LightType::Area: return "area";
+    }
+    throw std::logic_error("unknown LightType");
 }
 
 template <class Enum>
@@ -366,6 +376,10 @@ json environmentJson(const Environment& environment) {
     json result;
     result["sun"] = std::move(sunJson);
     result["sky"]["intensity"] = floatJson(environment.sky.intensity);
+    if (!environment.sky.image.empty()) {
+        result["sky"]["image"] = environment.sky.image;
+        result["sky"]["imageRotationDegrees"] = floatJson(environment.sky.imageRotationDegrees);
+    }
     result["shadows"]["enabled"] = environment.shadows.enabled;
     result["shadows"]["softness"] = floatJson(environment.shadows.softness);
     return result;
@@ -380,6 +394,7 @@ json lookJson(const Look& look) {
     result["warmth"] = floatJson(look.warmth);
     result["vignette"] = floatJson(look.vignette);
     result["clay"] = look.clay;
+    result["autoExposure"] = look.autoExposure;
     return result;
 }
 
@@ -404,12 +419,21 @@ json materialJson(const MaterialResource& resource) {
     result["metalnessMap"] = slotJson(material.metalnessMap);
     result["normalMap"] = slotJson(material.normalMap);
     result["occlusionMap"] = slotJson(material.occlusionMap);
+    result["heightMap"] = slotJson(material.heightMap);
+    result["heightDepth"] = floatJson(material.heightDepth);
     result["normalStrength"] = floatJson(material.normalStrength);
     result["normalFlipY"] = material.normalFlipY;
     result["mapping"] = enumJson(material.mapping);
     result["textureScale"] = vecJson(material.textureScale);
     result["textureRotationDegrees"] = floatJson(material.textureRotationDegrees);
     result["textureOffset"] = vecJson(material.textureOffset);
+    result["variation"] = floatJson(material.variation);
+    result["randomTileRotation"] = material.randomTileRotation;
+    result["transmission"] = floatJson(material.transmission);
+    result["ior"] = floatJson(material.ior);
+    result["thinWalled"] = material.thinWalled;
+    result["emissionColor"] = vecJson(material.emissionColor);
+    result["emissionStrength"] = floatJson(material.emissionStrength);
     return result;
 }
 
@@ -460,6 +484,18 @@ json entityJson(const Entity& entity) {
         result["meshInstance"]["material"] = idJson(entity.meshInstance->material);
     } else {
         result["meshInstance"] = nullptr;
+    }
+    if (entity.light) {
+        const Light& light = *entity.light;
+        json lightJson;
+        lightJson["type"] = enumJson(light.type);
+        lightJson["lumens"] = floatJson(light.lumens);
+        lightJson["temperatureKelvin"] = floatJson(light.temperatureKelvin);
+        lightJson["radius"] = floatJson(light.radius);
+        lightJson["areaSize"] = vecJson(light.areaSize);
+        lightJson["spotAngleDegrees"] = floatJson(light.spotAngleDegrees);
+        lightJson["spotSoftness"] = floatJson(light.spotSoftness);
+        result["light"] = std::move(lightJson);
     }
     return result;
 }
@@ -609,7 +645,13 @@ Environment asEnvironment(const json& object) {
     sun.dateTime.hours = floatAt(dateTime, "hours");
     sun.intensity = floatAt(sunJson, "intensity");
     sun.temperatureKelvin = floatAt(sunJson, "temperatureKelvin");
-    environment.sky.intensity = floatAt(field(object, "sky"), "intensity");
+    const json& sky = field(object, "sky");
+    environment.sky.intensity = floatAt(sky, "intensity");
+    // Sky images were added after format 1 shipped (optional; a linked file, not embedded).
+    if (sky.contains("image")) {
+        environment.sky.image = stringAt(sky, "image");
+        environment.sky.imageRotationDegrees = floatAt(sky, "imageRotationDegrees");
+    }
     const json& shadows = field(object, "shadows");
     environment.shadows.enabled = boolAt(shadows, "enabled");
     environment.shadows.softness = floatAt(shadows, "softness");
@@ -620,12 +662,15 @@ Look asLook(const json& object) {
     Look look;
     look.exposureEv = floatAt(object, "exposureEv");
     look.toneMapping = enumAt(object, "toneMapping",
-                              {ToneMapping::Filmic, ToneMapping::Neutral, ToneMapping::None});
+                              {ToneMapping::Filmic, ToneMapping::Neutral, ToneMapping::None,
+                               ToneMapping::AgX});
     look.contrast = floatAt(object, "contrast");
     look.saturation = floatAt(object, "saturation");
     look.warmth = floatAt(object, "warmth");
     look.vignette = floatAt(object, "vignette");
     look.clay = boolAt(object, "clay");
+    // Added after format 1 shipped; older projects keep their fixed exposure.
+    look.autoExposure = object.contains("autoExposure") && boolAt(object, "autoExposure");
     return look;
 }
 
@@ -651,12 +696,31 @@ MaterialResource asMaterial(const json& object) {
     material.metalnessMap = slotAt(object, "metalnessMap");
     material.normalMap = slotAt(object, "normalMap");
     material.occlusionMap = slotAt(object, "occlusionMap");
+    // Added after format 1 shipped; older projects have no height map.
+    if (object.contains("heightMap")) {
+        material.heightMap = slotAt(object, "heightMap");
+        material.heightDepth = floatAt(object, "heightDepth");
+    }
     material.normalStrength = floatAt(object, "normalStrength");
     material.normalFlipY = boolAt(object, "normalFlipY");
     material.mapping = enumAt(object, "mapping", {TextureMapping::UV, TextureMapping::Box});
     material.textureScale = vecAt<2>(object, "textureScale");
     material.textureRotationDegrees = floatAt(object, "textureRotationDegrees");
     material.textureOffset = vecAt<2>(object, "textureOffset");
+    // Added after format 1 shipped; projects saved before it have no variation.
+    material.variation = object.contains("variation") ? floatAt(object, "variation") : 0.0f;
+    material.randomTileRotation =
+        object.contains("randomTileRotation") && boolAt(object, "randomTileRotation");
+    // Glass and emission were added after format 1 shipped; older projects are opaque, unlit.
+    if (object.contains("transmission")) {
+        material.transmission = floatAt(object, "transmission");
+        material.ior = floatAt(object, "ior");
+        material.thinWalled = boolAt(object, "thinWalled");
+    }
+    if (object.contains("emissionStrength")) {
+        material.emissionColor = vecAt<3>(object, "emissionColor");
+        material.emissionStrength = floatAt(object, "emissionStrength");
+    }
     return resource;
 }
 
@@ -678,6 +742,19 @@ Entity asEntity(const json& object) {
     if (!instance.is_null()) {
         entity.meshInstance = MeshInstance{idAt<ResourceId>(instance, "mesh"),
                                            optionalIdAt<ResourceId>(instance, "material")};
+    }
+    // Lights were added after format 1 shipped (optional key).
+    if (object.contains("light")) {
+        const json& lightJson = field(object, "light");
+        Light light;
+        light.type = enumAt(lightJson, "type", {LightType::Point, LightType::Spot, LightType::Area});
+        light.lumens = floatAt(lightJson, "lumens");
+        light.temperatureKelvin = floatAt(lightJson, "temperatureKelvin");
+        light.radius = floatAt(lightJson, "radius");
+        light.areaSize = vecAt<2>(lightJson, "areaSize");
+        light.spotAngleDegrees = floatAt(lightJson, "spotAngleDegrees");
+        light.spotSoftness = floatAt(lightJson, "spotSoftness");
+        entity.light = light;
     }
     return entity;
 }

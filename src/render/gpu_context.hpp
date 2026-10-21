@@ -62,6 +62,9 @@ public:
     std::uint32_t bindlessTextureCapacity = 0; // texture slots: min(kMaxBindlessTextures, limits)
     bool samplerAnisotropy = false;            // feature enabled on the device
     float maxSamplerAnisotropy = 1.0f;
+    bool nonUniformTextureIndexing = false; // enabled when supported (path tracer)
+    bool timestamps = false;                // GPU timestamp queries on the graphics queue
+    float timestampPeriodNs = 1.0f;
     DeviceInfo info;
 
 private:

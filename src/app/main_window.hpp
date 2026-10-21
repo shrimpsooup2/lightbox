@@ -26,14 +26,16 @@ namespace lb::app {
 
 class ImportPanel;
 class ProjectController;
+class RenderScreen;
 class StartScreen;
 class ViewportWindow;
 
-// Main application window showing one document (docs/WORKFLOW.md). Two pages: the start screen
-// (recent projects, New / Open / Sample) while no project is open, and the workspace. The workspace
-// has three panels, same in every mode: the current mode's panel on the left, Scene above
-// Properties on the right, the viewport in the center. The header bar switches modes; each mode
-// remembers how the user sized or moved the panels. `scene` must outlive the window.
+// Main application window showing one document (docs/WORKFLOW.md). Three pages: the start screen
+// (recent projects, New / Open / Sample) while no project is open, the workspace, and the render
+// screen (final images, D-029). The workspace has three panels, same in every mode: the current
+// mode's panel on the left, Scene above Properties on the right, the viewport in the center. The
+// header bar switches modes; each mode remembers how the user sized or moved the panels. `scene`
+// must outlive the window.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -57,6 +59,9 @@ public:
     void openProject(const QString& path); // reads in the background; the workspace shows when done
     void showStartScreen();
     void showWorkspace();
+    // The render screen replaces the workspace (docks hidden) until Back/Esc.
+    void showRenderScreen();
+    void closeRenderScreen();
     ProjectController& projects() { return *project_; }
 
 protected:
@@ -83,14 +88,15 @@ private:
 
     void openProjectDialog();
     void closeProject();
-    // A dropped `.lbox` opens; models and images import (starting a new project from the start
-    // screen).
+    // A dropped `.lbox` opens; a `.hdr` panorama becomes the sky; models and images import
+    // (starting a new project from the start screen).
     void openDroppedFiles(const QStringList& paths);
     void updateProjectChrome();
     void updateRecentMenu();
     void setStartScreenChrome(bool startScreen);
 
     render::Renderer& renderer_;
+    Scene& scene_;
     std::unique_ptr<render::SceneSync> sceneSync_; // shared by all viewports of this scene
     std::unique_ptr<Selection> selection_;
     ViewportWindow* viewport_ = nullptr;
@@ -100,10 +106,12 @@ private:
     QProgressBar* importProgress_ = nullptr; // status bar, visible while importing
 
     ProjectController* project_ = nullptr;
-    QStackedWidget* pages_ = nullptr; // central: workspace or start screen
+    QStackedWidget* pages_ = nullptr; // central: workspace, start screen or render screen
     QWidget* workspacePage_ = nullptr;
     StartScreen* startScreen_ = nullptr;
     bool onStartScreen_ = false;
+    RenderScreen* renderScreen_ = nullptr;
+    bool onRenderScreen_ = false;
     QLabel* projectLabel_ = nullptr;          // header: project name, "•" when modified
     QAction* projectLabelAction_ = nullptr;   // its header slot (hidden on the start screen)
 
@@ -130,9 +138,15 @@ private:
     QAction* projectsAction_ = nullptr; // header: back to the start screen
     QAction* importAction_ = nullptr;
     QAction* textureSetAction_ = nullptr;
+    QAction* renderImageAction_ = nullptr; // opens the render screen
     QAction* frameAction_ = nullptr;
     QAction* resetViewAction_ = nullptr;
     QAction* gridAction_ = nullptr;
+    QAction* walkAction_ = nullptr;
+    QAction* rayAction_ = nullptr; // ray traced view on/off
+    QLabel* rayLabel_ = nullptr;   // its progress in the status bar
+    QProgressBar* rayBar_ = nullptr;
+    QActionGroup* orbitGroup_ = nullptr; // orbit modes (viewport toolbar, View menu)
     QAction* darkThemeAction_ = nullptr;
     QAction* lightThemeAction_ = nullptr;
     QAction* toggleThemeAction_ = nullptr;

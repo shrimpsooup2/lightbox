@@ -1,5 +1,8 @@
 # lb_render: the Vulkan "Live" engine. Depends on lb_core and the Vulkan stack — never on Qt.
 add_library(lb_render STATIC
+    path_tracer.cpp
+    path_tracer.hpp
+    ray_scene.hpp
     frame_data.hpp
     gpu_context.cpp
     gpu_context.hpp
@@ -23,7 +26,12 @@ lightbox_add_shaders(lb_render
         shaders/grid.frag
         shaders/mesh.vert
         shaders/mesh.frag
-        shaders/shadow.vert)
+        shaders/shadow.vert
+        shaders/overlay.vert
+        shaders/overlay.frag
+        shaders/composite.frag
+        shaders/exposure.comp
+        shaders/pathtrace.comp)
 
 target_link_libraries(lb_render
     PUBLIC lb_core Vulkan::Headers
