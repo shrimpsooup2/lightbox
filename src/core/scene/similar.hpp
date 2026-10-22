@@ -11,7 +11,8 @@ namespace lb {
 
 class Scene;
 
-// Finding "the same kind of object" by name, so a material can go onto every window at once.
+// Finding "the same kind of object" by name (the object's and its material's), so a material can
+// go onto every window at once.
 //
 // similarityKey() reduces a name to what stays the same between copies: lower case, words split at
 // separators and camelCase, copy markers removed (".001", " (2)", "#3", "[12]", ": 345678",
@@ -24,9 +25,11 @@ class Scene;
 std::string similarityKey(std::string_view name);
 // The mesh objects to treat together with `ids`: the mesh objects in or inside `ids`, plus every
 // object named like a selected object (similarityKey; mesh objects match mesh objects, groups match
-// groups and bring their contents) and every copy of a selected object's geometry at the same size,
-// whatever its name (scaled instances of one shape, like massing boxes, are not copies). Unnamed
-// objects only bring their copies. Order: as meshEntitiesIn.
+// groups and bring their contents), every object using a selected mesh object's material or one
+// named like it ("Brick_01" ~ "brick.002"; objects without a material never match this way), and
+// every copy of a selected object's geometry at the same size, whatever its name (scaled instances
+// of one shape, like massing boxes, are not copies). Generic names (object or material) match only
+// identical names inside the same top-level model. Order: as meshEntitiesIn.
 std::vector<EntityId> withSimilarObjects(const Scene& scene, std::span<const EntityId> ids);
 
 } // namespace lb

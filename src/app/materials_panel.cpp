@@ -227,9 +227,11 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
     similar_ = new QCheckBox(tr("Include similar objects"), page);
     similar_->setToolTip(
         tr("Apply also gives the material to every object named like the selected ones "
-           "(Window_01, Window_02, Window (3) and Window.001 all count as “window”) and to copies "
-           "of the same object. Made-up names such as “Object 12” or “Material14” only match the "
-           "exact same name inside the same model. Also used by the texture library."));
+           "(Window_01, Window_02, Window (3) and Window.001 all count as “window”), to every "
+           "object whose material is the same or named alike (Brick_01, brick.002 → “brick”), "
+           "and to copies of the same object. Made-up names such as “Object 12” or “Material14” "
+           "only match the exact same name inside the same model; objects without a material "
+           "don't count as alike. Also used by the texture library."));
     similar_->setChecked(includeSimilarObjects());
     layout->addWidget(similar_);
     similarNote_ = ui::label(QString(), "muted", page);
@@ -937,27 +939,46 @@ void MaterialsPanel::updateActions() {
     // Say what "similar" found, so it is clear before applying.
     const int extra = targets - selectedObjects;
     if (extra > 0) {
-        // The names of all selected objects (up to three), not just the last one clicked.
-        QStringList keys;
+        // The object and material names of all selected objects (up to three of each), not just
+        // the last one clicked.
+        QStringList names;
+        QStringList materialNames;
+        const auto addKey = [](QStringList& list, const std::string& name) {
+            const QString key = QString::fromStdString(similarityKey(name));
+            if (!key.isEmpty() && !list.contains(key)) {
+                list.append(key);
+            }
+        };
         for (const EntityId id : selection_.ids()) {
             const Entity* entity = scene_.entity(id);
-            const QString key =
-                entity != nullptr ? QString::fromStdString(similarityKey(entity->name)) : QString();
-            if (!key.isEmpty() && !keys.contains(key)) {
-                keys.append(key);
+            if (entity == nullptr) {
+                continue;
+            }
+            addKey(names, entity->name);
+            if (entity->meshInstance && entity->meshInstance->material) {
+                if (const MaterialResource* material =
+                        scene_.material(entity->meshInstance->material)) {
+                    addKey(materialNames, material->name);
+                }
             }
         }
-        const QString more = ui::count(extra, tr("1 more object"), tr("%1 more objects"));
-        if (keys.isEmpty()) {
-            similarNote_->setText(tr("Includes %1: copies of the selected objects.").arg(more));
-        } else {
-            QStringList quoted;
+        const auto quoted = [this](const QStringList& keys) {
+            QStringList parts;
             for (qsizetype i = 0; i < std::min<qsizetype>(keys.size(), 3); ++i) {
-                quoted.append(QStringLiteral("“%1”").arg(keys[i]));
+                parts.append(QStringLiteral("“%1”").arg(keys[i]));
             }
-            const QString names = quoted.join(tr(", ")) + (keys.size() > 3 ? tr("…") : QString());
-            similarNote_->setText(tr("Includes %1 named like %2, or copies.").arg(more, names));
+            return parts.join(tr(", ")) + (keys.size() > 3 ? tr("…") : QString());
+        };
+        const QString more = ui::count(extra, tr("1 more object"), tr("%1 more objects"));
+        QStringList reasons;
+        if (!names.isEmpty()) {
+            reasons.append(tr("named like %1").arg(quoted(names)));
         }
+        if (!materialNames.isEmpty()) {
+            reasons.append(tr("with materials like %1").arg(quoted(materialNames)));
+        }
+        reasons.append(tr("copies"));
+        similarNote_->setText(tr("Includes %1: %2.").arg(more, reasons.join(tr("; "))));
     }
     similarNote_->setVisible(extra > 0);
     const int users = hasMaterial ? usageOf(materialUsage_, current_) : 0;

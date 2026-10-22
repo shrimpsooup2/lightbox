@@ -136,6 +136,41 @@ TEST_CASE("Scaled instances of one shape are not copies (the sample house's mass
     CHECK(sorted(withSimilarObjects(scene, std::vector{columnA})) == sorted({columnA, columnB}));
 }
 
+TEST_CASE("Objects with the same or a similarly named material are similar") {
+    Scene scene;
+    const auto object = [&](const char* name, EntityId parent, ResourceId material) {
+        const EntityId id = scene.createEntity(name, parent);
+        scene.setMeshInstance(
+            id, MeshInstance{scene.addMesh(name, makeBox({0, 0, 0}, {1, 1, 1})), material});
+        return id;
+    };
+    const ResourceId brick1 = scene.addMaterial("Brick_01", materialWithColor({0.6f, 0.3f, 0.2f}));
+    const ResourceId brick2 = scene.addMaterial("brick.002", materialWithColor({0.6f, 0.3f, 0.2f}));
+    const ResourceId redBrick = scene.addMaterial("Red brick", materialWithColor({0.7f, 0.2f, 0.1f}));
+    const ResourceId glass = scene.addMaterial("Glass", materialWithColor({0.9f, 0.9f, 0.9f}));
+    const ResourceId m14 = scene.addMaterial("Material14", materialWithColor({0.5f, 0.5f, 0.5f}));
+    const ResourceId m14other = scene.addMaterial("Material14", materialWithColor({0.4f, 0.4f, 0.4f}));
+
+    const EntityId house = scene.createEntity("House");
+    const EntityId north = object("North wall", house, brick1);
+    const EntityId south = object("South wall", house, brick2);    // similar material name
+    const EntityId chimney = object("Chimney", house, brick1);     // same material
+    object("Garden wall", house, redBrick);                       // a different material
+    object("Window", house, glass);
+    const EntityId plinth = object("Plinth", house, {});          // no material: default clay
+    object("Path", house, {});
+    const EntityId a = object("Object_1", house, m14);
+    const EntityId b = object("Object_2", house, m14);
+    const EntityId other = scene.createEntity("Other model");
+    object("Object_3", other, m14other); // same generic material name, other model
+
+    CHECK(sorted(withSimilarObjects(scene, std::vector{north})) == sorted({north, south, chimney}));
+    // Default clay doesn't make objects similar.
+    CHECK(withSimilarObjects(scene, std::vector{plinth}) == std::vector{plinth});
+    // Generic material names: identical name, same model only.
+    CHECK(sorted(withSimilarObjects(scene, std::vector{a})) == sorted({a, b}));
+}
+
 TEST_CASE("Generic names match identical names within the same model only") {
     Scene scene;
     const ResourceId a = scene.addMesh("A", makeBox({0, 0, 0}, {1, 1, 1}));

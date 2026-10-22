@@ -464,15 +464,17 @@ entry with a new one that references it (`Supersedes D-00X`).
     instead, so only identical names match, and only inside the same top-level model.
     Multi-material parts ("Window_03 · Glass") match on both halves.
   - `withSimilarObjects(scene, ids)`: the selection's mesh objects, plus same-key objects of the same
-    kind (mesh with mesh; group with group, bringing its contents), plus copies of a selected mesh's
-    geometry at the same world size (1 %), whatever their name.
+    kind (mesh with mesh; group with group, bringing its contents), plus objects using a selected
+    mesh object's material or one whose name has the same key ("Brick_01" ~ "brick.002"; added at the
+    owner's request: "it should match things named like similar materials"; no material = default
+    clay never matches; generic material names only within the same model), plus copies of a
+    selected mesh's geometry at the same world size (1 %), whatever their name.
   - Materials ▸ *Include similar objects* (on by default, `materials/includeSimilar`); Apply shows
     the total ("Apply to 24 objects") and a line naming the key before anything changes. The texture
     library's Apply uses the same targets.
 - **Consequences:** No undo yet (0.7), so the count is shown before applying. Objects named by
   number only ("Object 12") and unrelated objects sharing a stem ("Glass" in windows and in doors)
-  are handled conservatively/inclusively as described; matching by material or by shape similarity
-  is not done.
+  are handled conservatively/inclusively as described; matching by shape similarity is not done.
 
 ### D-031 · 2026-10-21 · Accepted · Selection outline from a mask in the composite; Shift/Ctrl+click toggles
 

@@ -36,6 +36,19 @@ Newest entry first. Keep it short and factual:
 
 ## Session log
 
+### 2026-10-21 · Claude (omp) · Similar objects also by material name (D-030)
+
+- **Did:** owner: "it should match things named like similar materials". `withSimilarObjects` also
+  brings objects using a selected object's material or a material named alike (same similarity key;
+  generic names like "Material14" only within one model; default clay never matches). The Materials
+  note names both: "Includes N more objects: named like “fin”; with materials like “black steel”;
+  copies."
+- **Verified:** warning-free `ninja -j 2` build; 95 test cases pass (new: same material, similarly
+  named material, default clay not grouping, generic material names limited to one model). In the
+  app (pavilion): clicking a fin gives "Apply to 44 objects" (all Black steel objects) and the note
+  above. Desktop copy refreshed.
+- **Decisions:** D-030 updated.
+
 ### 2026-10-21 · Claude (omp) · Apply to similar objects, selection outline, Shift-select (D-030, D-031)
 
 - **Did:** `core/scene/similar.*` (name keys, same-size geometry copies); Materials ▸ *Include

@@ -224,7 +224,23 @@ std::vector<EntityId> withSimilarObjects(const Scene& scene, std::span<const Ent
         }
         return id;
     };
+    // Material names are keyed once per material, not once per object using it.
+    std::unordered_map<ResourceId, NameKey> materialKeys;
+    const auto materialKey = [&](ResourceId material) -> const NameKey& {
+        auto it = materialKeys.find(material);
+        if (it == materialKeys.end()) {
+            const MaterialResource* resource = scene.material(material);
+            it = materialKeys.emplace(material, resource != nullptr ? keyOf(resource->name) : NameKey{})
+                     .first;
+        }
+        return it->second;
+    };
+
     std::vector<Probe> probes;
+    // Selected mesh objects also bring objects with the same material or a similarly named one
+    // ("Brick_01", "brick.002"); objects without a material (default clay) don't group together.
+    std::unordered_set<ResourceId> materials;
+    std::vector<Probe> materialProbes;
     // Copies of the same geometry at the same size. Scaled instances of one shape (LightBox's
     // massing boxes are one unit cube) are different objects.
     std::vector<std::pair<ResourceId, glm::vec3>> geometry;
@@ -237,13 +253,19 @@ std::vector<EntityId> withSimilarObjects(const Scene& scene, std::span<const Ent
         if (mesh && entity->meshInstance->mesh) {
             geometry.emplace_back(entity->meshInstance->mesh, scaleOf(scene.worldMatrix(id)));
         }
+        if (mesh && entity->meshInstance->material) {
+            materials.insert(entity->meshInstance->material);
+            if (const NameKey& key = materialKey(entity->meshInstance->material); !key.key.empty()) {
+                materialProbes.push_back({key, rootOf(id), true});
+            }
+        }
         if (NameKey name = keyOf(entity->name); !name.key.empty()) {
             probes.push_back({std::move(name), rootOf(id), mesh});
         }
     }
 
     std::vector<EntityId> matches(ids.begin(), ids.end());
-    if (!probes.empty() || !geometry.empty()) {
+    if (!probes.empty() || !geometry.empty() || !materials.empty()) {
         std::unordered_map<EntityId, EntityId> roots; // parents are visited before children
         scene.traverse([&](const Entity& entity, const glm::mat4& world) {
             const EntityId root = entity.parent ? roots.at(entity.parent) : entity.id;
@@ -255,6 +277,20 @@ std::vector<EntityId> withSimilarObjects(const Scene& scene, std::span<const Ent
                     if (shape == entity.meshInstance->mesh && sameScale(scale, size)) {
                         matches.push_back(entity.id);
                         return;
+                    }
+                }
+                if (const ResourceId material = entity.meshInstance->material; material) {
+                    if (materials.contains(material)) {
+                        matches.push_back(entity.id);
+                        return;
+                    }
+                    const NameKey& key = materialKey(material);
+                    for (const Probe& probe : materialProbes) {
+                        if (!key.key.empty() && probe.name.key == key.key &&
+                            (!probe.name.generic || probe.root == root)) {
+                            matches.push_back(entity.id);
+                            return;
+                        }
                     }
                 }
             }
