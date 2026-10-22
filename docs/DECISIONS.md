@@ -441,10 +441,51 @@ entry with a new one that references it (`Supersedes D-00X`).
   path tracer, sky image, composite) with no surface: one sRGB target image, no acquire/present,
   read-back always possible, no MSAA (the path tracer antialiases; a 4K multisampled target would not
   fit an integrated GPU). `RenderScreen` is a third page of the main window next to the start screen
-  and the workspace: size (View, HD, Full HD, 4K), quality, speed, Render/Stop, progress with time
+  and the workspace: resolution (presets or any width × height, 16–8192 px per side; larger needs
+  tiled rendering), print DPI (metadata only: PNG pHYs / JPEG density), quality, speed, Render/Stop, progress with time
   left, Save image (PNG/JPEG), Back/Esc. It renders the current view from
   `ViewportWindow::renderScreenInput`; the editing viewport is hidden meanwhile, so the GPU is the
   render's. A fresh presenter per render; it is freed when the render ends.
 - **Consequences:** Views (2.9) will let the screen render saved views instead of only the current
   one; the gallery of results, batch queue, panoramas and passes remain 3.12 work.
+
+### D-030 · 2026-10-21 · Accepted · "Include similar objects" when applying materials: name keys + same-size copies
+
+- **Context:** The owner: when adding materials there should be an option to apply to all similar
+  objects, detected by name, "a reliable feature … important for ease of use". Imported models name
+  copies in many styles (Window_01, Window (2), Window.001, Window#3, Revit ": 345678"), and some name
+  nodes generically: a Sketchfab glTF here names all 299 nodes "Material1"…"Material65", where the
+  number is the identity; naive digit stripping would lump them all together. LightBox's own massing
+  boxes are one unit cube instanced at different scales.
+- **Decision:** `core/scene/similar.*`:
+  - `similarityKey(name)`: lower case, words split at separators/camelCase/letter-digit changes, copy
+    markers removed (".001", "(2)", "#3", "[12]", ": 345678", "copy", "Copy of"), numbers dropped.
+    Names made only of generic words (object, mesh, material, group, cube, …) keep every token
+    instead, so only identical names match, and only inside the same top-level model.
+    Multi-material parts ("Window_03 · Glass") match on both halves.
+  - `withSimilarObjects(scene, ids)`: the selection's mesh objects, plus same-key objects of the same
+    kind (mesh with mesh; group with group, bringing its contents), plus copies of a selected mesh's
+    geometry at the same world size (1 %), whatever their name.
+  - Materials ▸ *Include similar objects* (on by default, `materials/includeSimilar`); Apply shows
+    the total ("Apply to 24 objects") and a line naming the key before anything changes. The texture
+    library's Apply uses the same targets.
+- **Consequences:** No undo yet (0.7), so the count is shown before applying. Objects named by
+  number only ("Object 12") and unrelated objects sharing a stem ("Glass" in windows and in doors)
+  are handled conservatively/inclusively as described; matching by material or by shape similarity
+  is not done.
+
+### D-031 · 2026-10-21 · Accepted · Selection outline from a mask in the composite; Shift/Ctrl+click toggles
+
+- **Context:** The owner asked for an indicator border around selected objects and for selecting
+  several objects with Shift.
+- **Decision:** Each frame with a selection, the selected mesh objects (`FrameInput::highlighted`,
+  sorted entity ids; `DrawItem::entity` added) are drawn into a single-sample R8 mask with no depth
+  test; `composite.frag` paints the accent color where a ring of 24 mask samples (radius = 2 px × device
+  pixel ratio) touches the selection from outside. One extra pass over the selected meshes only; works
+  the same over the raster and the ray-traced image; drawn after the look, so exposure never changes
+  it. Hidden parts are outlined too (no depth test): it shows where a selected object is behind walls.
+  Off in Render mode and in saved images/renders (overlay rule). `Selection::toggle` adds (as the
+  primary) or removes; the viewport passes Shift/Ctrl with clicks.
+- **Consequences:** Hidden and visible parts look the same (a dimmer hidden outline would need the
+  MSAA depth buffer). Box select is still open (2.5).
 

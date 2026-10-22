@@ -45,6 +45,19 @@ void Selection::clear() {
     set({});
 }
 
+void Selection::toggle(EntityId id) {
+    if (!id || scene_.entity(id) == nullptr) {
+        return;
+    }
+    std::vector<EntityId> next(ids_.begin(), ids_.end());
+    if (const auto it = std::find(next.begin(), next.end(), id); it != next.end()) {
+        next.erase(it);
+    } else {
+        next.push_back(id); // the newest becomes the primary
+    }
+    set(next);
+}
+
 bool Selection::contains(EntityId id) const {
     return std::find(ids_.begin(), ids_.end(), id) != ids_.end();
 }

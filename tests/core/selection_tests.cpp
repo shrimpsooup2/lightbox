@@ -62,6 +62,24 @@ TEST_CASE("selection notifies only on real changes") {
     CHECK(notifications == 2);
 }
 
+TEST_CASE("shift-click toggling adds as the primary and removes again") {
+    Scene scene;
+    const EntityId a = scene.createEntity("a");
+    const EntityId b = scene.createEntity("b");
+    Selection selection(scene);
+    selection.select(a);
+    selection.toggle(b);
+    CHECK(std::vector<EntityId>(selection.ids().begin(), selection.ids().end()) ==
+          std::vector{a, b});
+    CHECK(selection.primary() == b);
+    selection.toggle(a); // already selected: removed, b stays
+    CHECK(std::vector<EntityId>(selection.ids().begin(), selection.ids().end()) ==
+          std::vector{b});
+    selection.toggle(EntityId{}); // none and unknown ids change nothing
+    selection.toggle(EntityId{999});
+    CHECK(selection.ids().size() == 1);
+}
+
 TEST_CASE("sRGB transfer functions round-trip and hit reference points") {
     CHECK(srgbToLinear(0.0f) == doctest::Approx(0.0f));
     CHECK(srgbToLinear(1.0f) == doctest::Approx(1.0f));

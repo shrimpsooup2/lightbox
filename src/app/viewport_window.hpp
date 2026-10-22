@@ -70,6 +70,8 @@ public:
     OrbitMode orbitMode() const { return orbitMode_; }
     // Move/rotate handles on the selection (Import and Build modes).
     void setGizmoEnabled(bool enabled);
+    // Outline around the selected objects (every mode but Render, which keeps the view clean).
+    void setSelectionOutline(bool enabled);
     // Ray-traced view (on/off, quality, speed). Refines by itself after each change.
     void setRayTracing(const render::RayTracingSettings& settings);
     const render::RayTracingSettings& rayTracing() const { return rayTracing_; }
@@ -94,9 +96,9 @@ signals:
     // Local model or image files were dropped on the viewport (file paths).
     void filesDropped(const QStringList& paths);
     void walkModeChanged(bool on);
-    // A click without dragging, outside walk mode: the mesh object under the cursor (none = empty
-    // space).
-    void entityClicked(lb::EntityId entity);
+    // A click without dragging, outside walk mode: the mesh object or light under the cursor
+    // (none = empty space); `add` when Shift or Ctrl was held (toggle it in the selection).
+    void entityClicked(lb::EntityId entity, bool add);
     // A short how-to for the status bar.
     void hint(const QString& text);
     void rayTracingChanged();
@@ -152,6 +154,11 @@ private:
     GizmoDrag drag_;
     GizmoHandle hoverHandle_ = GizmoHandle::None;
     bool gizmoEnabled_ = false;
+    bool outlineEnabled_ = true;
+    // Entity ids of the selected mesh objects (groups expanded), sorted: the outline's input.
+    // Updated when the selection or the scene changes, not per frame.
+    std::vector<std::uint64_t> highlighted_;
+    bool highlightDirty_ = true;
     render::RayTracingSettings rayTracing_;
     std::string skyImagePath_; // what skyImage_/skyImageLoad_ belong to
     std::future<std::shared_ptr<const EnvironmentMap>> skyImageLoad_;

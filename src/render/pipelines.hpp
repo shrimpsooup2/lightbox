@@ -38,6 +38,9 @@ constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 // Format of the sun shadow map (depth only, standard 0 = near depth, compare LESS_OR_EQUAL).
 constexpr VkFormat kShadowMapFormat = VK_FORMAT_D32_SFLOAT;
 
+// Selection mask (1 where a selected object is), outlined by the composite pass.
+constexpr VkFormat kSelectionMaskFormat = VK_FORMAT_R8_UNORM;
+
 // Owns shader modules, the descriptor set and pipeline layouts, the shadow pipeline and the scene
 // pipelines per render-target format.
 //
@@ -46,7 +49,8 @@ constexpr VkFormat kShadowMapFormat = VK_FORMAT_D32_SFLOAT;
 //   binding 2 = linear texture views[capacity] (partially bound; index = TextureHandle).
 // Descriptor set 1 (per presenter): binding 0 = sun shadow map (combined image sampler).
 // Post layout (composite, auto exposure): set 0 binding 0 = raster HDR image, binding 1 = path
-// tracer accumulation (combined image samplers); push constants = PostPushConstants.
+// tracer accumulation, binding 2 = selection mask (combined image samplers); push constants =
+// PostPushConstants.
 constexpr std::uint32_t kTextureSet = 0;
 constexpr std::uint32_t kShadowSet = 1;
 constexpr std::uint32_t kSamplerBinding = 0;
@@ -68,6 +72,8 @@ public:
     VkDescriptorSetLayout textureSetLayout() const { return textureSetLayout_; }
     VkDescriptorSetLayout shadowSetLayout() const { return shadowSetLayout_; }
     VkPipeline shadow() const { return shadow_; }
+    // Selected objects into the selection mask (scene layout, mesh vertices, no depth).
+    VkPipeline selectionMask() const { return selectionMask_; }
     // Creates the set on first use for a given target format. The returned reference is valid until
     // the next call with a new key.
     const PipelineSet& get(const PipelineKey& key);
@@ -94,6 +100,8 @@ private:
     VkDescriptorSetLayout postSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout postLayout_ = VK_NULL_HANDLE;
     VkShaderModule compositeFrag_ = VK_NULL_HANDLE;
+    VkShaderModule maskFrag_ = VK_NULL_HANDLE;
+    VkPipeline selectionMask_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout accumulationSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pathLayout_ = VK_NULL_HANDLE;
     VkPipeline pathTrace_ = VK_NULL_HANDLE;

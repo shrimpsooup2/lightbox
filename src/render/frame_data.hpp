@@ -107,9 +107,11 @@ struct PostPushConstants {
                               // in seconds, w: auto exposure (1/0)
     VkDeviceAddress frame;    // this frame's FrameData
     VkDeviceAddress exposure; // ExposureState (auto exposure)
+    glm::vec4 outline;        // selection outline: rgb linear color, a: width in pixels (0: none)
 };
 static_assert(offsetof(PostPushConstants, frame) == 16);
-static_assert(sizeof(PostPushConstants) == 32);
+static_assert(offsetof(PostPushConstants, outline) == 32);
+static_assert(sizeof(PostPushConstants) == 48);
 
 // Push constants of the path tracer (pathtrace.comp).
 struct PathPushConstants {

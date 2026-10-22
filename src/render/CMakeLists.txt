@@ -29,6 +29,7 @@ lightbox_add_shaders(lb_render
         shaders/shadow.vert
         shaders/overlay.vert
         shaders/overlay.frag
+        shaders/mask.frag
         shaders/composite.frag
         shaders/exposure.comp
         shaders/pathtrace.comp)

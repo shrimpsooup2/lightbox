@@ -41,6 +41,9 @@ public:
     TextureBrowser(Scene& scene, Selection& selection, QWidget* parent = nullptr);
     ~TextureBrowser() override;
 
+    // Refreshes the Apply button (selection or the "Include similar objects" option changed).
+    void updateActions();
+
 signals:
     // A material was created (and applied to the selection, if any).
     void materialAdded(lb::ResourceId material, const QString& message);
@@ -67,7 +70,6 @@ private:
     void searchPolyHaven(const QString& text);
     void showResults(std::vector<Asset> assets, int total);
     void loadThumbnail(int row);
-    void updateActions();
     void setStatus(const QString& text, bool error = false);
     void setBusy(bool busy);
     void rebuildGrid(); // from results_ (e.g. after a download or a resolution change)

@@ -75,7 +75,7 @@ The order follows the work: bring the design in, dress it, light it, shoot it.
 | Left panel | **Materials in this project** (swatch, name, number of objects using it), material library (presets, CC0 packs) |
 | Tools | Apply to selection, select objects using a material, eyedropper, replace everywhere, real-world texture size |
 | Properties | Full material editor for the material of the selection (PBR parameters, texture slots, mapping) |
-| Status | **today:** action rows (New, From textures…, Apply to selected — works on groups/imported models, Select users, Delete unused); material list with texture thumbnails and usage; sections **Base** (name, color, color map), **Surface** (roughness/metalness + maps with channel/invert, Matte/Satin/Glossy/Metal/Polished presets), **Relief** (normal map, strength, DirectX flip), **Occlusion**, **Mapping** (UV / Box at real-world size, scale, rotation, offset); **Textures in project** grid with preview and *Remove unused*. **Texture library…** (top button) searches ambientCG and Poly Haven (CC0) with category quick-searches and a 1K/2K/4K choice; one click downloads the set into the local library, makes a material at its real-world size and applies it to the selection (groups included). Dropping texture images, a downloaded pack (.zip) or a folder makes one PBR material (ambientCG, Poly Haven and Poliigon naming) and applies it to the selection. Mapping has one-click tile sizes (0.5–5 m), **Variation** (hides the repeating grid of tiled textures from a distance; 0.5 for downloaded sets) and **Rotate each tile randomly** (off by default; for stone, concrete, plaster, ground; not for bricks or planks). Clicking an object in the viewport selects it and shows its material. Remaining: preset library and material ball 2.8, eyedropper/replace everywhere 2.8, full model 3.3 |
+| Status | **today:** action rows (New, From textures…, Apply to selected — works on groups/imported models, Select users, Delete unused; **Include similar objects**, on by default and also used by the texture library: Apply also covers objects named like the selection (Window_01, Window (2), Window.001 → “window”) and same-size copies of it, with a line saying how many more objects that is; made-up names like “Object 12” or “Material14” match only the same name in the same model, D-030); material list with texture thumbnails and usage; sections **Base** (name, color, color map), **Surface** (roughness/metalness + maps with channel/invert, Matte/Satin/Glossy/Metal/Polished presets), **Relief** (normal map, strength, DirectX flip), **Occlusion**, **Mapping** (UV / Box at real-world size, scale, rotation, offset); **Textures in project** grid with preview and *Remove unused*. **Texture library…** (top button) searches ambientCG and Poly Haven (CC0) with category quick-searches and a 1K/2K/4K choice; one click downloads the set into the local library, makes a material at its real-world size and applies it to the selection (groups included). Dropping texture images, a downloaded pack (.zip) or a folder makes one PBR material (ambientCG, Poly Haven and Poliigon naming) and applies it to the selection. Mapping has one-click tile sizes (0.5–5 m), **Variation** (hides the repeating grid of tiled textures from a distance; 0.5 for downloaded sets) and **Rotate each tile randomly** (off by default; for stone, concrete, plaster, ground; not for bricks or planks). Clicking an object in the viewport selects it and shows its material. Remaining: preset library and material ball 2.8, eyedropper/replace everywhere 2.8, full model 3.3 |
 
 ### Site (Ctrl+4) — "put it in its place"
 
@@ -106,7 +106,9 @@ The order follows the work: bring the design in, dress it, light it, shoot it.
 
 **Render screen** (File ▸ Render Image…, Ctrl+Shift+R, or *Render image…* in the Render panel; D-029):
 replaces the workspace like the start screen does. The image of the current view fills in on the left;
-on the right: Size (View, HD, Full HD, 4K), Quality, Speed, **Render**/Stop, progress with time left,
+on the right: **Resolution** (presets: same as the view, HD, Full HD, QHD, 4K UHD, square, portrait 4:5,
+or any width × height up to 8192 px, with *Keep proportions*), **Print resolution** (DPI written into
+the saved file, quick 72/150/300, with megapixels and print size in cm/in), Quality, Speed, **Render**/Stop, progress with time left,
 **Save image…** (PNG/JPEG, also mid-render), *Back to editing* (Esc). Renders offscreen, so covering
 the window or switching apps doesn't pause it.
 
@@ -203,6 +205,10 @@ Must be defensible: solar position from a published algorithm, true north explic
   Properties and the Materials editor follow); **double-click** → Properties (0.7).
 - **Orbit modes** (viewport toolbar, every mode, remembered): orbit around the model, around the point
   under the cursor (SketchUp-style), or look around from where the camera stands.
+- **Select** (every mode): click an object; **Shift or Ctrl + click** adds it to the selection or
+  removes it (and keeps the selection when clicking empty space). Selected objects get a **blue
+  outline**, also where they are hidden behind other objects; Render mode leaves it out, and it is
+  never in saved images or renders.
 - **Walk** (viewport toolbar, every mode): click where to stand, W A S D / arrows to move, drag to look,
   Shift runs, Q/E down/up, Esc stops. Eye height 1.6 m; you slide along walls instead of passing through.
 

@@ -5,6 +5,7 @@
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <QPointer>
 #include <QWidget>
@@ -29,6 +30,12 @@ class TextureGrid;
 class TextureSlotWidget;
 class TextureThumbnails;
 class TextureBrowser;
+
+// The "Include similar objects" option (Materials panel; the texture library follows it).
+bool includeSimilarObjects();
+// The mesh objects a material applied to the selection goes onto: the selected objects, plus
+// objects named like them and copies of them when the option is on (core/scene/similar.hpp).
+std::vector<EntityId> materialTargets(const Scene& scene, const Selection& selection);
 
 // Materials mode panel (D-019 style): actions (new, from a texture set, apply to the selection,
 // select users, delete), every material with a thumbnail and its usage, the selected material's
@@ -115,6 +122,8 @@ private:
     QPushButton* apply_ = nullptr;
     QPushButton* selectUsers_ = nullptr;
     QPushButton* delete_ = nullptr;
+    QCheckBox* similar_ = nullptr;   // "Include similar objects"
+    QLabel* similarNote_ = nullptr;  // which extra objects Apply will cover
     QProgressBar* progress_ = nullptr;
     QLabel* notice_ = nullptr;
     QTreeWidget* list_ = nullptr;

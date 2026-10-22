@@ -17,6 +17,7 @@
 #include "shaders/grid.frag.h"
 #include "shaders/mesh.frag.h"
 #include "shaders/mesh.vert.h"
+#include "shaders/mask.frag.h"
 #include "shaders/overlay.frag.h"
 #include "shaders/overlay.vert.h"
 #include "shaders/pathtrace.comp.h"
@@ -218,6 +219,7 @@ Pipelines::Pipelines(VkDevice device, std::uint32_t textureCapacity, bool pathTr
     overlayVert_ = createModule(device_, lb_spv_overlay_vert);
     overlayFrag_ = createModule(device_, lb_spv_overlay_frag);
     compositeFrag_ = createModule(device_, lb_spv_composite_frag);
+    maskFrag_ = createModule(device_, lb_spv_mask_frag);
 
     // Set 0: bindless material textures. Slots are written as textures are uploaded (also while
     // earlier frames are in flight) and only slots referenced by materials are ever read.
@@ -269,7 +271,8 @@ Pipelines::Pipelines(VkDevice device, std::uint32_t textureCapacity, bool pathTr
     layoutInfo.pPushConstantRanges = &pushRange;
     LB_VK_CHECK(vkCreatePipelineLayout(device_, &layoutInfo, nullptr, &layout_));
 
-    // Post layout: the raster HDR image and the path tracer's accumulation, PostPushConstants.
+    // Post layout: the raster HDR image, the path tracer's accumulation and the selection mask,
+    // PostPushConstants.
     constexpr VkShaderStageFlags kPostStages =
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     const VkDescriptorSetLayoutBinding postBindings[] = {
@@ -277,10 +280,11 @@ Pipelines::Pipelines(VkDevice device, std::uint32_t textureCapacity, bool pathTr
          VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
          VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
     VkDescriptorSetLayoutCreateInfo postSetInfo{};
     postSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    postSetInfo.bindingCount = 2;
+    postSetInfo.bindingCount = 3;
     postSetInfo.pBindings = postBindings;
     LB_VK_CHECK(vkCreateDescriptorSetLayout(device_, &postSetInfo, nullptr, &postSetLayout_));
     const VkPushConstantRange postRange{kPostStages, 0, sizeof(PostPushConstants)};
@@ -329,6 +333,11 @@ Pipelines::Pipelines(VkDevice device, std::uint32_t textureCapacity, bool pathTr
                              .depthTest = true,
                              .depthWrite = true,
                              .shadowDepth = true});
+    selectionMask_ = buildPipeline(device_, pipelineCache_, layout_,
+                                   {.vertex = meshVert_,
+                                    .fragment = maskFrag_,
+                                    .colorFormat = kSelectionMaskFormat,
+                                    .meshVertices = true});
 }
 
 VkPipeline Pipelines::pathTrace() {
@@ -382,12 +391,13 @@ Pipelines::~Pipelines() {
     vkDestroyDescriptorSetLayout(device_, postSetLayout_, nullptr);
     vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
     vkDestroyPipeline(device_, shadow_, nullptr);
+    vkDestroyPipeline(device_, selectionMask_, nullptr);
     vkDestroyPipelineLayout(device_, layout_, nullptr);
     vkDestroyDescriptorSetLayout(device_, shadowSetLayout_, nullptr);
     vkDestroyDescriptorSetLayout(device_, textureSetLayout_, nullptr);
     for (VkShaderModule module :
          {fullscreenVert_, skyFrag_, gridFrag_, meshVert_, meshFrag_, shadowVert_, overlayVert_,
-          overlayFrag_, compositeFrag_}) {
+          overlayFrag_, compositeFrag_, maskFrag_}) {
         vkDestroyShaderModule(device_, module, nullptr);
     }
 }

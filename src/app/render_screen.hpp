@@ -7,9 +7,12 @@
 
 #include "render/renderer.hpp"
 
+class QCheckBox;
+class QComboBox;
 class QLabel;
 class QProgressBar;
 class QPushButton;
+class QSpinBox;
 class QTimer;
 
 namespace lb::app {
@@ -50,8 +53,16 @@ private:
     void step();
     // Stops the render loop with a status line; `capture` reads the image once more first.
     void finish(const QString& message, bool capture);
+    // Saves the image with the chosen DPI written into the file (for printing).
     void saveImage();
     QSize outputSize() const;
+    // The editing view's size in pixels (the "Same as the view" preset).
+    QSize viewportSize() const;
+    // A size preset was chosen: fills in width and height (Custom keeps them).
+    void applyPreset(int index);
+    void setOutputSize(QSize size);
+    // Width, height or preset changed: remember it, and restart a render in progress.
+    void sizeChanged();
     render::FrameInput frameInput();
     void updateControls();
 
@@ -64,8 +75,14 @@ private:
     bool rendering_ = false;
 
     Preview* preview_ = nullptr;
-    ui::SegmentedControl* size_ = nullptr;
-    QLabel* sizeNote_ = nullptr;
+    QComboBox* sizePreset_ = nullptr;
+    QSpinBox* width_ = nullptr;
+    QSpinBox* height_ = nullptr;
+    QCheckBox* keepProportions_ = nullptr;
+    double aspect_ = 16.0 / 9.0; // kept while "Keep proportions" is on
+    bool updatingSize_ = false;
+    QSpinBox* dpi_ = nullptr;
+    QLabel* sizeNote_ = nullptr; // megapixels and print size
     ui::SegmentedControl* quality_ = nullptr;
     ui::SegmentedControl* speed_ = nullptr;
     QPushButton* renderButton_ = nullptr;

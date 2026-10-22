@@ -181,7 +181,8 @@ and updated later without losing work.*
   under the cursor, look around; remembered); renderer-drawn overlay lines (gizmos, D-026).
 - [~] **2.5 Selection & transform tools.** Click/box select, move/rotate/scale gizmos, snapping (grid,
   vertex, edge, face, midpoint), numeric entry, align/distribute, array along line/path. *Accept:* every
-  tool undoable; numeric entry respects project units. *Done (D-024, D-026):* click select; move/rotate/
+  tool undoable; numeric entry respects project units. *Done (D-024, D-026, D-031):* click select, Shift/Ctrl+click adds or removes, a blue outline
+  around the selected objects (every mode but Render); move/rotate/
   scale gizmo in Import and Build modes (X/Y/Z arrows, ground square, X/Y/Z rings, X/Y/Z scale squares
   and an even-scale center; Shift snaps 0.1 m / 15° / 10 %; the whole selection, groups once).
   *Remaining:* undo (needs 0.7 commands), box select, geometry snapping, numeric entry, align/distribute, arrays.
@@ -294,8 +295,8 @@ scenes; the Final engine (Cycles) competes with V-Ray/Corona. Same scene, materi
   the image fill in, find results in a gallery — rather than only refining in the editing viewport
   (which keeps the quick preview and the optional ray-traced view). *Done (D-029):* the render
   screen for the current view (File ▸ Render Image…, Ctrl+Shift+R, or Render ▸ Render image…):
-  size View/HD/Full HD/4K, quality, speed, live preview, progress with time left, Save image
-  (PNG/JPEG), offscreen so it never pauses. *Open:* picking saved Views, results gallery, queue.
+  resolution presets or any width × height up to 8192 px, print DPI saved in PNG/JPEG, quality,
+  speed, live preview, progress with time left, Save image (PNG/JPEG), offscreen so it never pauses. *Open:* picking saved Views, results gallery, queue.
 - [ ] **3.13 Styles & post.** One-click looks (Morning, Golden hour, Overcast, Dusk, Night interior, Clay,
   White model, Sketch/line art outlines), color grading with LUTs, depth of field.
 - [ ] **3.14 Animation & video.** Camera paths (keyframes, splines), sun studies (date/time animation),

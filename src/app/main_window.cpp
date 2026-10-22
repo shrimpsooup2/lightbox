@@ -176,9 +176,15 @@ MainWindow::MainWindow(render::Renderer& renderer, QVulkanInstance& vulkan, Scen
                                   .arg(message));
     });
     connect(viewport_, &ViewportWindow::filesDropped, this, &MainWindow::openDroppedFiles);
-    // Clicking an object in the viewport selects it (Materials then shows its material).
-    connect(viewport_, &ViewportWindow::entityClicked, this,
-            [this](EntityId entity) { selection_->select(entity); });
+    // Clicking an object in the viewport selects it (Materials then shows its material);
+    // Shift/Ctrl+click adds or removes it, and keeps the selection on empty space.
+    connect(viewport_, &ViewportWindow::entityClicked, this, [this](EntityId entity, bool add) {
+        if (!add) {
+            selection_->select(entity);
+        } else if (entity) {
+            selection_->toggle(entity);
+        }
+    });
     connect(viewport_, &ViewportWindow::hint, this, [this](const QString& text) {
         if (text.isEmpty()) {
             statusBar()->clearMessage();
@@ -513,6 +519,8 @@ void MainWindow::showModePage(WorkspaceMode mode) {
     // picking materials.
     viewport_->setGizmoEnabled(mode == WorkspaceMode::Import || mode == WorkspaceMode::Build ||
                                mode == WorkspaceMode::Light);
+    // The selection outline helps everywhere except when framing the final image.
+    viewport_->setSelectionOutline(mode != WorkspaceMode::Render);
 }
 
 void MainWindow::applyDefaultLayout() {

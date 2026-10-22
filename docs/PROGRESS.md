@@ -36,6 +36,37 @@ Newest entry first. Keep it short and factual:
 
 ## Session log
 
+### 2026-10-21 · Claude (omp) · Apply to similar objects, selection outline, Shift-select (D-030, D-031)
+
+- **Did:** `core/scene/similar.*` (name keys, same-size geometry copies); Materials ▸ *Include
+  similar objects* (on by default) with "Apply to N objects" and a line saying what was matched;
+  the texture library applies to the same objects (`materialTargets`, shared setting).
+- **Also:** a **selection outline** (selected objects drawn into an R8 mask, outlined in the
+  accent color by the composite; every mode but Render, never in saved images) and **Shift/Ctrl+click**
+  to add or remove objects (`Selection::toggle`), D-031.
+- **Verified:** warning-free `ninja -j 2` build; 94 test cases pass (new: similarity keys for
+  Blender/SketchUp/Revit/copy names, generic names keep numbers, multi-material parts, same-name and
+  same-size-copy matching, scaled unit-cube instances not matched, Sketchfab "Material14" limited to
+  one model; Selection::toggle). In the app (pavilion scene): clicking a fin shows "Apply to 23
+  objects" / "Includes 22 more objects named like “fin”"; Shift+click on the deck adds it (Apply to 24),
+  and both get the blue outline (checked with a temporary local build whose screenshot kept overlays;
+  external screen grabs can't see the Vulkan view on this Intel laptop at the moment, even with
+  older builds: the view sits on a hardware overlay plane).
+- **Decisions:** D-030, D-031.
+
+### 2026-10-21 · Claude (omp) · Render screen: resolution and DPI (3.12)
+
+- **Did:** the render screen's size buttons became **Resolution**: presets (same as the view, HD,
+  Full HD, QHD, 4K UHD, square 2048², portrait 4:5) plus editable width × height (16–8192 px, typing
+  switches to Custom) with *Keep proportions*; **Print resolution** in DPI (quick 72/150/300) written
+  into saved PNG (pHYs) and JPEG (JFIF density); a line with megapixels and print size in cm and inches.
+  All remembered in QSettings (`renderScreen/*`).
+- **Verified:** warning-free `ninja -j 2` build. Scripted run: wheel on the width field 1920 → 1925
+  moved the height to 1083 and switched the preset to Custom; 72 DPI changed the print size to
+  67.9 × 38.2 cm; Draft render done in 1:18; the saved PNG read back as 1925 × 1083 at 72 DPI (PIL).
+  Standalone copy in `C:/Users/30HamghalamA/LightBox App` refreshed.
+- **Decisions:** D-029 updated.
+
 ### 2026-10-21 · Claude (omp) · Renderer: lights, glass, HDR, path tracer (3.8a), sky images (D-027, D-028)
 
 - **Did:**

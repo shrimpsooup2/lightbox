@@ -261,6 +261,7 @@ void SceneSync::update() {
         item.transform = world;
         item.material = materialIndex(entity.meshInstance->material);
         item.transparent = materials_[item.material].transmission > 0.0f;
+        item.entity = entity.id.value;
         draws_.push_back(item);
     });
     dirty_ = false;

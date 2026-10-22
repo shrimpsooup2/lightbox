@@ -12,6 +12,7 @@ add_executable(lb_tests
     core/raycast_tests.cpp
     core/scene_tests.cpp
     core/selection_tests.cpp
+    core/similar_tests.cpp
     core/solar_tests.cpp
     import/import_tests.cpp
     import/texture_set_tests.cpp

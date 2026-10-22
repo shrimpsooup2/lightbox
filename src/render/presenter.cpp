@@ -210,6 +210,7 @@ struct Presenter::Impl {
     Image depth;
     Image msaaColor;
     Image hdrColor; // linear scene image (resolve target), read by the composite
+    Image selectionMask; // selected objects (kSelectionMaskFormat), outlined by the composite
     std::vector<std::pair<float, std::uint32_t>> glassOrder; // reused per frame (no allocations)
 
     // Composite input: the HDR image through a nearest sampler (read 1:1 with texelFetch).
@@ -302,7 +303,7 @@ Presenter::Impl::Impl(Renderer::Impl& r, VkSurfaceKHR s, std::uint32_t width, st
     nearestInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     nearestInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     LB_VK_CHECK(vkCreateSampler(ctx.device, &nearestInfo, nullptr, &nearestSampler));
-    const VkDescriptorPoolSize postSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    const VkDescriptorPoolSize postSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
     VkDescriptorPoolCreateInfo postPoolInfo{};
     postPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     postPoolInfo.maxSets = 1;
@@ -354,6 +355,7 @@ void Presenter::Impl::destroySwapchainResources() {
     ctx.destroyImage(depth);
     ctx.destroyImage(msaaColor);
     ctx.destroyImage(hdrColor);
+    ctx.destroyImage(selectionMask);
     if (offscreen()) {
         views.clear(); // owned by offscreenTarget
         ctx.destroyImage(offscreenTarget);
@@ -562,14 +564,44 @@ void Presenter::Impl::createFrameTargets() {
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                      VK_IMAGE_USAGE_STORAGE_BIT,
                                  VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    selectionMask = ctx.createImage2D(kSelectionMaskFormat, extent,
+                                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                          VK_IMAGE_USAGE_SAMPLED_BIT |
+                                          VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                      VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+    // Empty and readable from the start (the composite always has it bound).
+    ctx.immediateSubmit([&](VkCommandBuffer cmd) {
+        const VkImageMemoryBarrier2 toClear = imageBarrier(
+            selectionMask.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_NONE,
+            VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkDependencyInfo dependency{};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.imageMemoryBarrierCount = 1;
+        dependency.pImageMemoryBarriers = &toClear;
+        vkCmdPipelineBarrier2(cmd, &dependency);
+        const VkClearColorValue zero{};
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cmd, selectionMask.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero,
+                             1, &range);
+        const VkImageMemoryBarrier2 toRead = imageBarrier(
+            selectionMask.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_PIPELINE_STAGE_2_CLEAR_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        dependency.pImageMemoryBarriers = &toRead;
+        vkCmdPipelineBarrier2(cmd, &dependency);
+    });
     pathTracer->resize(extent);
     // The device is idle here (vkDeviceWaitIdle above), so the set can be rewritten.
     const VkDescriptorImageInfo hdrInfo{nearestSampler, hdrColor.view,
                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     const VkDescriptorImageInfo accumulationInfo{nearestSampler, pathTracer->accumulation().view,
                                                  VK_IMAGE_LAYOUT_GENERAL};
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    for (std::uint32_t i = 0; i < 2; ++i) {
+    const VkDescriptorImageInfo maskInfo{nearestSampler, selectionMask.view,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    std::array<VkWriteDescriptorSet, 3> writes{};
+    for (std::uint32_t i = 0; i < writes.size(); ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = compositeSet;
         writes[i].dstBinding = i;
@@ -578,7 +610,9 @@ void Presenter::Impl::createFrameTargets() {
     }
     writes[0].pImageInfo = &hdrInfo;
     writes[1].pImageInfo = &accumulationInfo;
-    vkUpdateDescriptorSets(ctx.device, 2, writes.data(), 0, nullptr);
+    writes[2].pImageInfo = &maskInfo;
+    vkUpdateDescriptorSets(ctx.device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0,
+                           nullptr);
     dirty = false;
     log::debug("Frame targets {}x{} ({}), format {}", extent.width, extent.height,
                offscreen() ? "offscreen" : "window", static_cast<int>(surfaceFormat.format));
@@ -926,6 +960,66 @@ void Presenter::Impl::record(VkCommandBuffer cmd, std::uint32_t imageIndex,
     post.frame = frame.frameData.address;
     post.exposure = exposureBuffer.address;
 
+    // Selection outline: the selected objects into the mask (no depth test, so parts hidden behind
+    // walls are outlined too); the composite draws the outline around it.
+    if (!input.highlighted.empty() && input.highlightWidth > 0.0f) {
+        const auto barrier = [cmd](const VkImageMemoryBarrier2& image) {
+            VkDependencyInfo dependency{};
+            dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dependency.imageMemoryBarrierCount = 1;
+            dependency.pImageMemoryBarriers = &image;
+            vkCmdPipelineBarrier2(cmd, &dependency);
+        };
+        // The previous frame's composite may still be reading it.
+        barrier(imageBarrier(selectionMask.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
+        VkRenderingAttachmentInfo maskTarget{};
+        maskTarget.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        maskTarget.imageView = selectionMask.view;
+        maskTarget.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        maskTarget.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        maskTarget.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo maskRendering{};
+        maskRendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        maskRendering.renderArea = {{0, 0}, extent};
+        maskRendering.layerCount = 1;
+        maskRendering.colorAttachmentCount = 1;
+        maskRendering.pColorAttachments = &maskTarget;
+        vkCmdBeginRendering(cmd, &maskRendering);
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipelines.selectionMask());
+        for (const DrawItem& item : input.draws) {
+            if (!std::binary_search(input.highlighted.begin(), input.highlighted.end(),
+                                    item.entity) ||
+                !item.mesh.valid() || item.mesh.index >= renderer.meshes.size()) {
+                continue;
+            }
+            const GpuMesh& mesh = renderer.meshes[item.mesh.index];
+            if (mesh.indexCount == 0) {
+                continue;
+            }
+            const VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &mesh.vertices.buffer, &offset);
+            vkCmdBindIndexBuffer(cmd, mesh.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+            push.model = item.transform;
+            vkCmdPushConstants(cmd, layout, kStages, 0, sizeof(push), &push);
+            vkCmdDrawIndexed(cmd, mesh.indexCount, 1, 0, 0, 0);
+        }
+        vkCmdEndRendering(cmd);
+        barrier(imageBarrier(selectionMask.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+        post.outline = glm::vec4(input.highlightColor, input.highlightWidth);
+    }
     // Raster image → sampled; the swapchain image → color attachment.
     std::array<VkImageMemoryBarrier2, 2> toComposite{};
     std::uint32_t toCompositeCount = 0;

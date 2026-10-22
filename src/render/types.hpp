@@ -91,6 +91,7 @@ struct DrawItem {
     glm::mat4 transform{1.0f};
     std::uint32_t material = 0; // index into FrameInput::materials
     bool transparent = false;   // glass: drawn after opaque surfaces, blended
+    std::uint64_t entity = 0;   // the document entity (selection outline)
 };
 
 struct Lighting {
@@ -154,6 +155,11 @@ struct FrameInput {
     LookSettings look;
     bool showGrid = true;
     std::vector<OverlayLine> overlay; // gizmos, drawn last; widths in physical pixels
+    // Selection outline: entity ids of draws to outline (sorted ascending), its color (linear RGB)
+    // and width in physical pixels. Drawn over the final image like the overlay.
+    std::span<const std::uint64_t> highlighted;
+    glm::vec3 highlightColor{0.0f, 0.4f, 0.9f};
+    float highlightWidth = 2.0f;
     std::span<const LightParams> lights; // up to kMaxLights are used
     RayTracingSettings rayTracing;
     // Ray-traced geometry for the current scene (null while it is being prepared) and a counter

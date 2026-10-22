@@ -37,6 +37,8 @@ add_library(lb_core STATIC
     scene/scene.hpp
     scene/selection.cpp
     scene/selection.hpp
+    scene/similar.cpp
+    scene/similar.hpp
     scene/transform.cpp
     scene/transform.hpp)
 

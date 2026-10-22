@@ -32,6 +32,7 @@
 #include <QVBoxLayout>
 
 #include "app/background.hpp"
+#include "app/materials_panel.hpp"
 #include "app/property_widgets.hpp"
 #include "app/theme.hpp"
 #include "app/ui_helpers.hpp"
@@ -455,16 +456,21 @@ void TextureBrowser::loadThumbnail(int row) {
 
 void TextureBrowser::updateActions() {
     const bool working = download_ != nullptr || creating_;
-    const auto objects = static_cast<int>(meshEntitiesIn(scene_, selection_.ids()).size());
+    const auto objects = static_cast<int>(materialTargets(scene_, selection_).size());
+    const auto selected = static_cast<int>(meshEntitiesIn(scene_, selection_.ids()).size());
     use_->setEnabled(grid_->currentItem() != nullptr && !working);
     use_->setText(objects > 0 ? tr("Apply to %1")
                                     .arg(ui::count(objects, tr("1 object"), tr("%1 objects")))
                               : tr("Add material"));
-    use_->setToolTip(objects > 0
-                         ? tr("Download the texture (if needed), make a material and give it to the "
-                              "selected objects")
-                         : tr("Download the texture (if needed) and add it as a material. Select "
-                              "objects first to apply it right away."));
+    use_->setToolTip(
+        objects > selected
+            ? tr("Download the texture (if needed), make a material and give it to the selected "
+                 "objects and %1 similar ones (Materials ▸ Include similar objects)")
+                  .arg(objects - selected)
+        : objects > 0 ? tr("Download the texture (if needed), make a material and give it to the "
+                           "selected objects")
+                      : tr("Download the texture (if needed) and add it as a material. Select "
+                           "objects first to apply it right away."));
 }
 
 void TextureBrowser::setStatus(const QString& text, bool error) {
@@ -761,7 +767,8 @@ void TextureBrowser::createMaterial(const Asset& asset, const std::filesystem::p
                 setStatus(QString::fromUtf8(e.what()), true);
                 return;
             }
-            const auto applied = static_cast<int>(applyMaterial(scene_, selection_.ids(), id));
+            const auto applied = static_cast<int>(
+                applyMaterial(scene_, materialTargets(scene_, selection_), id));
             const QString size = sized ? sizeText(asset.widthMeters, asset.heightMeters)
                                        : sizeText(import::kDefaultTextureTileMeters,
                                                   import::kDefaultTextureTileMeters);

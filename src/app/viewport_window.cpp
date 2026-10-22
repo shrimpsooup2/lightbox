@@ -21,6 +21,8 @@
 #include <glm/matrix.hpp>
 
 #include "app/import_panel.hpp"
+#include "app/theme.hpp"
+#include "core/color.hpp"
 #include "core/log.hpp"
 #include "core/raycast.hpp"
 #include "core/solar.hpp"
@@ -47,10 +49,14 @@ ViewportWindow::ViewportWindow(render::Renderer& renderer, QVulkanInstance& vulk
     : renderer_(renderer), scene_(scene), selection_(selection), sync_(sync) {
     setSurfaceType(QSurface::VulkanSurface);
     setVulkanInstance(&vulkan);
-    sceneListener_ = scene_.addListener([this](const SceneChange&) { requestUpdate(); });
+    sceneListener_ = scene_.addListener([this](const SceneChange&) {
+        highlightDirty_ = true; // objects may have joined or left a selected group
+        requestUpdate();
+    });
     selectionListener_ = selection_.addListener([this] {
         hoverHandle_ = GizmoHandle::None;
-        requestUpdate(); // the gizmo follows the selection
+        highlightDirty_ = true;
+        requestUpdate(); // the gizmo and the outline follow the selection
     });
     walkTimer_ = new QTimer(this);
     walkTimer_->setInterval(16);
@@ -250,6 +256,14 @@ void ViewportWindow::renderFrame() {
     try {
         sync_.update();
         updateSkyImage();
+        if (highlightDirty_) {
+            highlighted_.clear();
+            for (const EntityId id : meshEntitiesIn(scene_, selection_.ids())) {
+                highlighted_.push_back(id.value);
+            }
+            std::sort(highlighted_.begin(), highlighted_.end());
+            highlightDirty_ = false;
+        }
         presenter_->resize(static_cast<std::uint32_t>(size.width()),
                            static_cast<std::uint32_t>(size.height()));
         QElapsedTimer timer;
@@ -304,6 +318,15 @@ render::FrameInput ViewportWindow::frameInput(QSize size, bool overlays) const {
         if (const std::optional<Gizmo> gizmo = currentGizmo()) {
             gizmo->appendLines(input.overlay, drag_.active() ? drag_.handle() : hoverHandle_,
                                static_cast<float>(devicePixelRatio()));
+        }
+        if (outlineEnabled_) {
+            // The accent color, about 2 px wide on screen. Saved images and renders have none.
+            const QColor accent = theme::palette().accent;
+            input.highlighted = highlighted_;
+            input.highlightColor = srgbToLinear(glm::vec3(static_cast<float>(accent.redF()),
+                                                          static_cast<float>(accent.greenF()),
+                                                          static_cast<float>(accent.blueF())));
+            input.highlightWidth = 2.0f * static_cast<float>(devicePixelRatio());
         }
     }
 
@@ -445,6 +468,11 @@ void ViewportWindow::setGizmoEnabled(bool enabled) {
     requestUpdate();
 }
 
+void ViewportWindow::setSelectionOutline(bool enabled) {
+    outlineEnabled_ = enabled;
+    requestUpdate();
+}
+
 std::optional<glm::vec3> ViewportWindow::pointUnder(QPointF position) const {
     glm::vec3 origin;
     glm::vec3 direction;
@@ -581,16 +609,18 @@ void ViewportWindow::mouseReleaseEvent(QMouseEvent* event) {
         standAt(event->position());
         return;
     }
+    // Shift or Ctrl adds to (or removes from) the selection instead of replacing it.
+    const bool add = (event->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier)) != 0;
     // Light icons are small: they win over the geometry behind them.
     if (const EntityId light = lightUnder(event->position())) {
-        emit entityClicked(light);
+        emit entityClicked(light, add);
         return;
     }
     glm::vec3 origin;
     glm::vec3 direction;
     if (mouseRay(event->position(), origin, direction)) {
         const std::optional<RayHit> hit = raycast(scene_, origin, direction);
-        emit entityClicked(hit ? hit->entity : EntityId{});
+        emit entityClicked(hit ? hit->entity : EntityId{}, add);
     }
 }
 

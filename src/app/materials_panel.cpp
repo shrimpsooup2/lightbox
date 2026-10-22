@@ -29,6 +29,7 @@
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QToolButton>
@@ -42,10 +43,13 @@
 #include "app/theme.hpp"
 #include "app/ui_helpers.hpp"
 #include "core/image.hpp"
+#include "core/scene/similar.hpp"
 #include "import/importer.hpp"
 
 namespace lb::app {
 namespace {
+
+const QString kIncludeSimilarKey = QStringLiteral("materials/includeSimilar");
 
 constexpr int kIdRole = Qt::UserRole;
 constexpr int kIconKeyRole = Qt::UserRole + 1; // what the row's icon was drawn from
@@ -172,6 +176,15 @@ QString errorText(std::exception_ptr error) {
 
 } // namespace
 
+bool includeSimilarObjects() {
+    return QSettings().value(kIncludeSimilarKey, true).toBool();
+}
+
+std::vector<EntityId> materialTargets(const Scene& scene, const Selection& selection) {
+    return includeSimilarObjects() ? withSimilarObjects(scene, selection.ids())
+                                   : meshEntitiesIn(scene, selection.ids());
+}
+
 MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* parent)
     : QWidget(parent), scene_(scene), selection_(selection) {
     thumbnails_ = new TextureThumbnails(scene_, this);
@@ -211,6 +224,18 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
     actions->setColumnStretch(0, 1);
     actions->setColumnStretch(1, 1);
     layout->addLayout(actions);
+    similar_ = new QCheckBox(tr("Include similar objects"), page);
+    similar_->setToolTip(
+        tr("Apply also gives the material to every object named like the selected ones "
+           "(Window_01, Window_02, Window (3) and Window.001 all count as “window”) and to copies "
+           "of the same object. Made-up names such as “Object 12” or “Material14” only match the "
+           "exact same name inside the same model. Also used by the texture library."));
+    similar_->setChecked(includeSimilarObjects());
+    layout->addWidget(similar_);
+    similarNote_ = ui::label(QString(), "muted", page);
+    similarNote_->setWordWrap(true);
+    similarNote_->hide();
+    layout->addWidget(similarNote_);
     progress_ = new QProgressBar(page);
     progress_->setRange(0, 100);
     progress_->setTextVisible(false);
@@ -475,6 +500,13 @@ MaterialsPanel::MaterialsPanel(Scene& scene, Selection& selection, QWidget* pare
     connect(fromTextures_, &QPushButton::clicked, this, &MaterialsPanel::createFromTextures);
     connect(library_, &QPushButton::clicked, this, &MaterialsPanel::openTextureLibrary);
     connect(apply_, &QPushButton::clicked, this, &MaterialsPanel::applyToSelection);
+    connect(similar_, &QCheckBox::toggled, this, [this](bool on) {
+        QSettings().setValue(kIncludeSimilarKey, on);
+        updateActions();
+        if (browser_) {
+            browser_->updateActions(); // its Apply count follows the option
+        }
+    });
     connect(selectUsers_, &QPushButton::clicked, this, &MaterialsPanel::selectUsers);
     connect(delete_, &QPushButton::clicked, this, &MaterialsPanel::deleteMaterial);
     connect(list_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
@@ -895,13 +927,39 @@ void MaterialsPanel::followSelection() {
 
 void MaterialsPanel::updateActions() {
     const auto selectedObjects = static_cast<int>(meshEntitiesIn(scene_, selection_.ids()).size());
+    const auto targets = static_cast<int>(materialTargets(scene_, selection_).size());
     const bool hasMaterial = static_cast<bool>(current_);
-    apply_->setEnabled(hasMaterial && selectedObjects > 0);
-    apply_->setText(selectedObjects > 1 ? tr("Apply to %1 selected").arg(selectedObjects)
-                                        : tr("Apply to selected"));
-    apply_->setToolTip(selectedObjects > 0
-                           ? tr("Give the selected objects this material")
+    apply_->setEnabled(hasMaterial && targets > 0);
+    apply_->setText(targets > 1 ? tr("Apply to %1 objects").arg(targets) : tr("Apply to selected"));
+    apply_->setToolTip(targets > 0
+                           ? tr("Give these objects this material")
                            : tr("First select objects in the scene or in the Scene panel"));
+    // Say what "similar" found, so it is clear before applying.
+    const int extra = targets - selectedObjects;
+    if (extra > 0) {
+        // The names of all selected objects (up to three), not just the last one clicked.
+        QStringList keys;
+        for (const EntityId id : selection_.ids()) {
+            const Entity* entity = scene_.entity(id);
+            const QString key =
+                entity != nullptr ? QString::fromStdString(similarityKey(entity->name)) : QString();
+            if (!key.isEmpty() && !keys.contains(key)) {
+                keys.append(key);
+            }
+        }
+        const QString more = ui::count(extra, tr("1 more object"), tr("%1 more objects"));
+        if (keys.isEmpty()) {
+            similarNote_->setText(tr("Includes %1: copies of the selected objects.").arg(more));
+        } else {
+            QStringList quoted;
+            for (qsizetype i = 0; i < std::min<qsizetype>(keys.size(), 3); ++i) {
+                quoted.append(QStringLiteral("“%1”").arg(keys[i]));
+            }
+            const QString names = quoted.join(tr(", ")) + (keys.size() > 3 ? tr("…") : QString());
+            similarNote_->setText(tr("Includes %1 named like %2, or copies.").arg(more, names));
+        }
+    }
+    similarNote_->setVisible(extra > 0);
     const int users = hasMaterial ? usageOf(materialUsage_, current_) : 0;
     selectUsers_->setEnabled(users > 0);
     delete_->setEnabled(hasMaterial && users == 0);
@@ -997,7 +1055,7 @@ void MaterialsPanel::applyToSelection() {
     if (!current_) {
         return;
     }
-    applyMaterial(scene_, selection_.ids(), current_);
+    applyMaterial(scene_, materialTargets(scene_, selection_), current_);
 }
 
 void MaterialsPanel::createMaterial() {

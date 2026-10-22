@@ -26,6 +26,9 @@ public:
     // Replaces the selection. Unknown IDs and duplicates are ignored.
     void set(std::span<const EntityId> ids);
     void select(EntityId id); // replace with a single entity (none = clear)
+    // Shift-click: adds the entity (as the primary) or removes it if it is already selected.
+    // Unknown IDs and none are ignored.
+    void toggle(EntityId id);
     void clear();
 
     bool contains(EntityId id) const;

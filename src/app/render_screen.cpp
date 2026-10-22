@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <exception>
 
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
@@ -17,6 +20,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QSpinBox>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -31,19 +35,41 @@
 namespace lb::app {
 namespace {
 
-struct OutputSize {
-    int width; // 0: the viewport's size
+struct SizePreset {
+    const char* name; // translated with tr()
+    int width;        // 0: not a fixed size (the view's size, or Custom)
     int height;
 };
-constexpr std::array kSizes = {OutputSize{0, 0}, OutputSize{1280, 720}, OutputSize{1920, 1080},
-                               OutputSize{3840, 2160}};
-constexpr int kDefaultSize = 2;    // Full HD
+const std::array kSizePresets = {
+    SizePreset{QT_TRANSLATE_NOOP("lb::app::RenderScreen", "Same as the view"), 0, 0},
+    SizePreset{QT_TRANSLATE_NOOP("lb::app::RenderScreen", "HD"), 1280, 720},
+    SizePreset{QT_TRANSLATE_NOOP("lb::app::RenderScreen", "Full HD"), 1920, 1080},
+    SizePreset{QT_TRANSLATE_NOOP("lb::app::RenderScreen", "QHD"), 2560, 1440},
+    SizePreset{QT_TRANSLATE_NOOP("lb::app::RenderScreen", "4K UHD"), 3840, 2160},
+    SizePreset{QT_TRANSLATE_NOOP("lb::app::RenderScreen", "Square"), 2048, 2048},
+    SizePreset{QT_TRANSLATE_NOOP("lb::app::RenderScreen", "Portrait 4:5"), 1080, 1350},
+    SizePreset{QT_TRANSLATE_NOOP("lb::app::RenderScreen", "Custom"), 0, 0},
+};
+constexpr int kViewPreset = 0;
+constexpr int kDefaultPreset = 2; // Full HD
+constexpr int kCustomPreset = static_cast<int>(kSizePresets.size()) - 1;
+// Image side limits. 8192 keeps the render's GPU images (about 32 bytes per pixel) within what
+// integrated graphics can hold; larger prints need tiled rendering (ROADMAP 3.12).
+constexpr int kMinSide = 16;
+constexpr int kMaxSide = 8192;
+constexpr int kDefaultDpi = 300;
+constexpr std::array kQuickDpi = {72, 150, 300};
 constexpr int kDefaultQuality = 1; // Good
 constexpr int kDefaultSpeed = 2;   // Fast: the user is waiting for this image
 // How often the screen shows the image filling in (each look reads the image back from the GPU).
 constexpr int kPreviewIntervalMs = 1000;
+constexpr double kMetersPerInch = 0.0254;
 
-const QString kSizeKey = QStringLiteral("renderScreen/size");
+const QString kPresetKey = QStringLiteral("renderScreen/sizePreset");
+const QString kWidthKey = QStringLiteral("renderScreen/width");
+const QString kHeightKey = QStringLiteral("renderScreen/height");
+const QString kProportionsKey = QStringLiteral("renderScreen/keepProportions");
+const QString kDpiKey = QStringLiteral("renderScreen/dpi");
 const QString kQualityKey = QStringLiteral("renderScreen/quality");
 const QString kSpeedKey = QStringLiteral("renderScreen/speed");
 const QString kDirectoryKey = QStringLiteral("renderScreen/lastDirectory");
@@ -120,15 +146,71 @@ RenderScreen::RenderScreen(render::Renderer& renderer, ViewportWindow& viewport,
     side->addSpacing(8);
 
     QSettings settings;
-    side->addWidget(ui::label(tr("Size"), "section", sidebar));
-    size_ = new ui::SegmentedControl({tr("View"), tr("HD"), tr("Full HD"), tr("4K")}, sidebar);
-    size_->setToolTip(tr("View: the size of the editing view. HD 1280 × 720, Full HD 1920 × 1080, "
-                         "4K 3840 × 2160. Four times the pixels take four times as long."));
-    size_->setCurrent(std::clamp(settings.value(kSizeKey, kDefaultSize).toInt(), 0,
-                                 static_cast<int>(kSizes.size()) - 1));
-    side->addWidget(size_);
+    side->addWidget(ui::label(tr("Resolution"), "section", sidebar));
+    sizePreset_ = new QComboBox(sidebar);
+    for (const SizePreset& preset : kSizePresets) {
+        sizePreset_->addItem(preset.width > 0 ? QStringLiteral("%1 (%2 × %3)")
+                                                    .arg(tr(preset.name))
+                                                    .arg(preset.width)
+                                                    .arg(preset.height)
+                                              : tr(preset.name));
+    }
+    sizePreset_->setToolTip(tr("Image size in pixels. Twice the width and height is four times "
+                               "the pixels and takes about four times as long."));
+    side->addWidget(sizePreset_);
+    const auto sideField = [sidebar](const QString& tip) {
+        auto* field = new QSpinBox(sidebar);
+        field->setRange(kMinSide, kMaxSide);
+        field->setSuffix(tr(" px"));
+        field->setKeyboardTracking(false); // applies on Enter or leaving the field, not per digit
+        field->setToolTip(tip);
+        return field;
+    };
+    auto* sizeRow = new QHBoxLayout;
+    sizeRow->setSpacing(6);
+    width_ = sideField(tr("Width in pixels (up to %1).").arg(kMaxSide));
+    height_ = sideField(tr("Height in pixels (up to %1).").arg(kMaxSide));
+    sizeRow->addWidget(width_, 1);
+    sizeRow->addWidget(ui::label(QStringLiteral("×"), "muted", sidebar));
+    sizeRow->addWidget(height_, 1);
+    side->addLayout(sizeRow);
+    keepProportions_ = new QCheckBox(tr("Keep proportions"), sidebar);
+    keepProportions_->setToolTip(tr("Changing the width changes the height with it, and the "
+                                    "other way round."));
+    keepProportions_->setChecked(settings.value(kProportionsKey, true).toBool());
+    side->addWidget(keepProportions_);
+
+    side->addWidget(ui::label(tr("Print resolution"), "section", sidebar));
+    auto* dpiRow = new QHBoxLayout;
+    dpiRow->setSpacing(6);
+    dpi_ = new QSpinBox(sidebar);
+    dpi_->setRange(30, 2400);
+    dpi_->setSuffix(tr(" DPI"));
+    dpi_->setKeyboardTracking(false);
+    dpi_->setToolTip(tr("Dots per inch saved in the image file: how large it prints. 300 DPI is "
+                        "print quality, 150 is fine for large posters seen from a distance, 72 "
+                        "or 96 for screens. It doesn't change the pixels or the render time."));
+    dpi_->setValue(std::clamp(settings.value(kDpiKey, kDefaultDpi).toInt(), 30, 2400));
+    dpiRow->addWidget(dpi_, 1);
+    for (const int dpi : kQuickDpi) {
+        auto* quick = new QPushButton(QString::number(dpi), sidebar);
+        quick->setProperty("compact", true);
+        quick->setToolTip(tr("%1 DPI").arg(dpi));
+        connect(quick, &QPushButton::clicked, this, [this, dpi] { dpi_->setValue(dpi); });
+        dpiRow->addWidget(quick);
+    }
+    side->addLayout(dpiRow);
     sizeNote_ = ui::label(QString(), "muted", sidebar);
+    sizeNote_->setWordWrap(true);
     side->addWidget(sizeNote_);
+
+    // Fixed presets fill in their size; Custom and "Same as the view" start from the saved one.
+    const int preset =
+        std::clamp(settings.value(kPresetKey, kDefaultPreset).toInt(), 0, kCustomPreset);
+    sizePreset_->setCurrentIndex(preset);
+    setOutputSize({std::clamp(settings.value(kWidthKey, 1920).toInt(), kMinSide, kMaxSide),
+                   std::clamp(settings.value(kHeightKey, 1080).toInt(), kMinSide, kMaxSide)});
+    applyPreset(preset);
 
     side->addWidget(ui::label(tr("Quality"), "section", sidebar));
     quality_ = new ui::SegmentedControl({tr("Draft"), tr("Good"), tr("Final"), tr("Ultra")}, sidebar);
@@ -180,12 +262,43 @@ RenderScreen::RenderScreen(render::Renderer& renderer, ViewportWindow& viewport,
     });
     connect(saveButton_, &QPushButton::clicked, this, &RenderScreen::saveImage);
     connect(back, &QPushButton::clicked, this, &RenderScreen::closeRequested);
-    connect(size_, &ui::SegmentedControl::currentEdited, this, [this](int index) {
-        QSettings().setValue(kSizeKey, index);
+    connect(sizePreset_, &QComboBox::activated, this, [this](int index) {
+        applyPreset(index);
+        sizeChanged();
+    });
+    const auto connectSide = [this](QSpinBox* edited, QSpinBox* other, bool widthEdited) {
+        connect(edited, &QSpinBox::valueChanged, this, [this, other, widthEdited](int value) {
+            if (updatingSize_) {
+                return;
+            }
+            if (keepProportions_->isChecked()) {
+                const double otherValue = widthEdited ? value / aspect_ : value * aspect_;
+                updatingSize_ = true;
+                other->setValue(std::clamp(static_cast<int>(std::lround(otherValue)), kMinSide,
+                                           kMaxSide));
+                updatingSize_ = false;
+            } else {
+                aspect_ = static_cast<double>(width_->value()) / height_->value();
+            }
+            // Typed numbers that differ from the chosen preset make it a custom size.
+            const SizePreset& current = kSizePresets[static_cast<std::size_t>(
+                sizePreset_->currentIndex())];
+            if (sizePreset_->currentIndex() == kViewPreset || current.width != width_->value() ||
+                current.height != height_->value()) {
+                sizePreset_->setCurrentIndex(kCustomPreset);
+            }
+            sizeChanged();
+        });
+    };
+    connectSide(width_, height_, true);
+    connectSide(height_, width_, false);
+    connect(keepProportions_, &QCheckBox::toggled, this, [this](bool on) {
+        QSettings().setValue(kProportionsKey, on);
+        aspect_ = static_cast<double>(width_->value()) / height_->value();
+    });
+    connect(dpi_, &QSpinBox::valueChanged, this, [this](int dpi) {
+        QSettings().setValue(kDpiKey, dpi);
         updateControls();
-        if (rendering_) {
-            start(); // a new size is a new image
-        }
     });
     // Quality and speed apply to a render in progress (a new quality restarts it by itself).
     connect(quality_, &ui::SegmentedControl::currentEdited, this,
@@ -199,6 +312,9 @@ RenderScreen::~RenderScreen() = default;
 
 void RenderScreen::prepare(const QString& projectName) {
     projectName_ = projectName;
+    if (sizePreset_->currentIndex() == kViewPreset) {
+        applyPreset(kViewPreset); // the view may have been resized since last time
+    }
     updateControls();
     setFocus();
 }
@@ -219,12 +335,44 @@ void RenderScreen::keyPressEvent(QKeyEvent* event) {
 }
 
 QSize RenderScreen::outputSize() const {
-    const OutputSize& size = kSizes[static_cast<std::size_t>(size_->current())];
-    if (size.width > 0) {
-        return {size.width, size.height};
-    }
+    return {width_->value(), height_->value()};
+}
+
+QSize RenderScreen::viewportSize() const {
     const QSize view = viewport_.size() * viewport_.devicePixelRatio();
-    return view.isEmpty() ? QSize(1280, 720) : view;
+    if (view.isEmpty()) {
+        return {1280, 720};
+    }
+    return {std::clamp(view.width(), kMinSide, kMaxSide),
+            std::clamp(view.height(), kMinSide, kMaxSide)};
+}
+
+void RenderScreen::applyPreset(int index) {
+    const SizePreset& preset = kSizePresets[static_cast<std::size_t>(index)];
+    if (index == kViewPreset) {
+        setOutputSize(viewportSize());
+    } else if (preset.width > 0) {
+        setOutputSize({preset.width, preset.height});
+    } // Custom keeps the numbers as they are
+}
+
+void RenderScreen::setOutputSize(QSize size) {
+    updatingSize_ = true;
+    width_->setValue(size.width());
+    height_->setValue(size.height());
+    updatingSize_ = false;
+    aspect_ = static_cast<double>(width_->value()) / height_->value();
+}
+
+void RenderScreen::sizeChanged() {
+    QSettings settings;
+    settings.setValue(kPresetKey, sizePreset_->currentIndex());
+    settings.setValue(kWidthKey, width_->value());
+    settings.setValue(kHeightKey, height_->value());
+    updateControls();
+    if (rendering_) {
+        start(); // a new size is a new image
+    }
 }
 
 render::FrameInput RenderScreen::frameInput() {
@@ -308,10 +456,15 @@ void RenderScreen::finish(const QString& message, bool capture) {
 }
 
 void RenderScreen::saveImage() {
-    const QImage image = preview_->image();
+    QImage image = preview_->image();
     if (image.isNull()) {
         return;
     }
+    // PNG stores it as pHYs, JPEG as JFIF density: image editors and printers read the print size.
+    const int dpi = dpi_->value();
+    const int dotsPerMeter = static_cast<int>(std::lround(dpi / kMetersPerInch));
+    image.setDotsPerMeterX(dotsPerMeter);
+    image.setDotsPerMeterY(dotsPerMeter);
     QSettings settings;
     const QString folder = settings
                                .value(kDirectoryKey, QStandardPaths::writableLocation(
@@ -332,7 +485,11 @@ void RenderScreen::saveImage() {
     const QString suffix = QFileInfo(path).suffix().toLower();
     const bool jpeg = suffix == QStringLiteral("jpg") || suffix == QStringLiteral("jpeg");
     if (image.save(path, nullptr, jpeg ? 95 : -1)) {
-        status_->setText(tr("Saved %1.").arg(QDir::toNativeSeparators(path)));
+        status_->setText(tr("Saved %1 (%2 × %3 pixels, %4 DPI).")
+                             .arg(QDir::toNativeSeparators(path))
+                             .arg(image.width())
+                             .arg(image.height())
+                             .arg(dpi));
     } else {
         status_->setText(tr("Could not save %1. Check the folder and file name.")
                              .arg(QDir::toNativeSeparators(path)));
@@ -341,7 +498,15 @@ void RenderScreen::saveImage() {
 
 void RenderScreen::updateControls() {
     const QSize size = outputSize();
-    sizeNote_->setText(tr("%1 × %2 pixels").arg(size.width()).arg(size.height()));
+    const double megapixels = static_cast<double>(size.width()) * size.height() / 1.0e6;
+    const double inchesWide = static_cast<double>(size.width()) / dpi_->value();
+    const double inchesHigh = static_cast<double>(size.height()) / dpi_->value();
+    sizeNote_->setText(tr("%1 megapixels · prints %2 × %3 cm (%4 × %5 in)")
+                           .arg(megapixels, 0, 'f', 1)
+                           .arg(inchesWide * 2.54, 0, 'f', 1)
+                           .arg(inchesHigh * 2.54, 0, 'f', 1)
+                           .arg(inchesWide, 0, 'f', 1)
+                           .arg(inchesHigh, 0, 'f', 1));
     renderButton_->setText(rendering_ ? tr("Stop") : tr("Render"));
     renderButton_->setIcon(theme::icon(rendering_ ? QStringLiteral("x")
                                                   : QStringLiteral("sparkles")));
