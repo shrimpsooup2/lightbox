@@ -27,6 +27,8 @@ add_library(lb_core STATIC
     sample_scene.hpp
     solar.cpp
     solar.hpp
+    terrain.cpp
+    terrain.hpp
     scene/environment.cpp
     scene/environment.hpp
     scene/ids.hpp

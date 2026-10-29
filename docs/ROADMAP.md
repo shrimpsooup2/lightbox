@@ -334,8 +334,13 @@ render correctly in Final. Natural water (lakes, rivers, ocean) reuses this core
 *Goal: a complete site and context: ground, sky, weather, planting and natural water, set up in one click
 and refined with friendly tools.*
 
-- [ ] **5.1 Terrain core.** Height-field terrain with tiled LOD (CDLOD/clipmaps), splat material layers
-  with height blending (grass, soil, gravel, rock, snow), displacement detail.
+- [~] **5.1 Terrain core.** Height-field terrain with tiled LOD (CDLOD/clipmaps), splat material layers
+  with height blending (grass, soil, gravel, rock, snow), displacement detail. *Done (D-032):* generated
+  ground (`core/terrain.*`): a square of rolling hills, flat under the building and blending out around
+  it, one mesh object "Terrain" with UVs in meters (any material tiles at real size); Site ▸ Ground
+  (Add ground, size, hill height/size, new shape, flat under the building, blend, remove). *Open:*
+  keeping the settings with the project (reopened ground is rebuilt from the panel), LOD for large
+  ground, splat layers, displacement, sculpting (5.2), imports landing on hills (they still sit at z = 0).
 - [ ] **5.2 Terraforming tools.** Brushes (raise, lower, smooth, flatten, ramp, noise), building pads
   (flatten to footprint with batter slope), paths/roads/curbs along splines carving the terrain, retaining
   walls, embankments; undoable sculpting.

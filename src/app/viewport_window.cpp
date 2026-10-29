@@ -26,6 +26,7 @@
 #include "core/log.hpp"
 #include "core/raycast.hpp"
 #include "core/solar.hpp"
+#include "core/terrain.hpp"
 
 namespace lb::app {
 namespace {
@@ -117,7 +118,9 @@ void ViewportWindow::updateSkyImage() {
 }
 
 void ViewportWindow::frameScene() {
-    if (const std::optional<Bounds> bounds = scene_.worldBounds()) {
+    // The design, not the (much larger) ground around it.
+    const std::optional<Bounds> bounds = contentBounds(scene_) ? contentBounds(scene_) : scene_.worldBounds();
+    if (bounds) {
         camera_.frame(*bounds);
     }
     requestUpdate();

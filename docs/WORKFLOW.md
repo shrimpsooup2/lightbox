@@ -81,10 +81,10 @@ The order follows the work: bring the design in, dress it, light it, shoot it.
 
 | | |
 | --- | --- |
-| Left panel | Terrain (sculpt, pads, paths), planting (species library, paint/area/line scatter), water (pools, fountains, cascades, ponds, rivers), context buildings, geolocation |
-| Tools | Brushes, spline tools, scatter rules, water feature presets |
-| Properties | Settings of the selected terrain layer, scatter system, water body or plant |
-| Status | **today:** short "coming soon" card. Water 4.1–4.8, environment 5.1–5.9 |
+| Left panel | **Ground**: *Add ground* makes a square of rolling hills around the building, flat under it; then **Shape** (size, hill height, hill size, *New shape*, *Flat under the building* and its blend distance) and *Remove*. Later: terrain tools, paths, pads, planting, water |
+| Tools | Sculpt brushes, building pads, path/road tool, planting brush, water tools (5.2–5.6) |
+| Properties | Settings of the selected site object |
+| Status | **today:** ground generation (D-032). The ground is one object named "Terrain": select it and pick a grass material in Materials; Include similar objects never mixes it up with the building. Framing and imports ignore it |
 
 ### Light (Ctrl+5) — "set the mood"
 

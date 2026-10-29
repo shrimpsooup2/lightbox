@@ -36,6 +36,8 @@ qt_add_executable(LightBox
     render_panel.hpp
     render_screen.cpp
     render_screen.hpp
+    site_panel.cpp
+    site_panel.hpp
     scene_tree_model.cpp
     scene_tree_model.hpp
     start_screen.cpp

@@ -36,6 +36,24 @@ Newest entry first. Keep it short and factual:
 
 ## Session log
 
+### 2026-10-21 · Claude (omp) · Stage 5 starts: generated ground (5.1, D-032)
+
+- **Did:** `core/terrain.*` (rolling hills, flat pad under the building, mesh with smooth normals and
+  meter UVs, find/set/remove, `contentBounds`, `terrainAroundContent`); Site mode panel (`app/site_panel.*`)
+  replacing the "coming soon" page: Add ground, size, hill height/size, New shape, Flat under the
+  building + blend, Remove (live, coalesced rebuilds; keeps the material the user gave the ground);
+  camera framing and import placement ignore the ground.
+- **Verified:** warning-free `ninja -j 2` build; 99 test cases pass (new: terrain mesh invariants and
+  winding, seed determinism, flat pad + smooth blend, ground around content / replace / remove). In
+  the app (sample house): Site ▸ Add ground built a 72 m ground (log: "Ground: 72 m square, 144
+  cells, hills 1.4 m every 22 m, flat under the building"); the house sits level in it, hills rise
+  around it, "Terrain" is selected with the outline and listed in the Scene panel.
+  Note: the first build of this session shipped without the Site panel wired in (a rejected edit
+  batch); caught by looking at the panel capture.
+- **Decisions:** D-032.
+- **Open / next:** settings kept with the project, terrain LOD, splat layers, sculpting brushes and
+  building pads (5.2), vegetation scatter (5.5), imports landing on hills.
+
 ### 2026-10-21 · Claude (omp) · Similar objects also by material name (D-030)
 
 - **Did:** owner: "it should match things named like similar materials". `withSimilarObjects` also

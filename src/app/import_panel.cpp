@@ -42,6 +42,7 @@
 #include "core/image.hpp"
 #include "core/log.hpp"
 #include "core/placement.hpp"
+#include "core/terrain.hpp"
 
 namespace lb::app {
 namespace {
@@ -547,8 +548,9 @@ void ImportPanel::addModel(const Job& job, import::ImportedModel model) {
         at = *job.dropPoint;
     } else {
         std::vector<EntityId> others;
+        const EntityId ground = findTerrain(scene_); // a model goes beside the design, not the ground
         for (const EntityId root : scene_.roots()) {
-            if (root != added.root) {
+            if (root != added.root && root != ground) {
                 others.push_back(root);
             }
         }

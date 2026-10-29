@@ -491,3 +491,21 @@ entry with a new one that references it (`Supersedes D-00X`).
 - **Consequences:** Hidden and visible parts look the same (a dimmer hidden outline would need the
   MSAA depth buffer). Box select is still open (2.5).
 
+### D-032 · 2026-10-21 · Accepted · Generated ground as a plain mesh object (5.1 first slice)
+
+- **Context:** Next in the plan after the renderer and material work: landscape. The owner's reference
+  image and every house render so far float in a void or on a flat plane.
+- **Decision:** `core/terrain.*`: `TerrainSettings` (center, extent, cells, hill height/size, seed, base
+  height, flat pad rectangle + blend) → `terrainHeightAt` (4-octave value noise × hill height, never below
+  the base, hills fade in over the pad blend) → `makeTerrainMesh` (grid, smooth normals from the height
+  function, UVs in meters). The ground is an ordinary mesh entity named "Terrain" (root level), so
+  save/load, materials, picking, the raster view and the path tracer need no new code; `setTerrain`
+  replaces it and its mesh. `terrainAroundContent` derives center, extent, pad rectangle (the content's
+  footprint + 1 m) and base height from everything except the ground. The base sits 5 mm above the
+  content's lowest point so the z = 0 grid and the path tracer's infinite ground plane never cover it.
+  Framing and import placement use `contentBounds` (everything but the ground).
+- **Consequences:** The generator settings are not stored in the project: reopening rebuilds from the
+  panel's values and loses hand-tuning (a terrain component with the settings, then height-field data
+  for sculpting, replaces this when 5.2 needs it). The mesh is saved like any mesh (about 66 k
+  vertices at most). Imports still land at z = 0, not on a hill. No LOD yet (≤ 256² cells).
+

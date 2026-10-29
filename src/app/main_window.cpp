@@ -39,6 +39,7 @@
 #include "app/project_controller.hpp"
 #include "app/render_panel.hpp"
 #include "app/render_screen.hpp"
+#include "app/site_panel.hpp"
 #include "app/start_screen.hpp"
 #include "app/theme.hpp"
 #include "app/ui_helpers.hpp"
@@ -494,11 +495,7 @@ void MainWindow::createDocks(Scene& scene) {
     modePages_->addWidget(importPanel_);
     modePages_->addWidget(makeBuildPage(nullptr));
     modePages_->addWidget(new MaterialsPanel(scene, *selection_));
-    modePages_->addWidget(makeComingSoonPage(
-        QStringLiteral("trees"), tr("Site tools are coming soon"),
-        tr("Shape the ground around your building, plant the garden and add water."),
-        {tr("Terrain, paths and building pads"), tr("Trees, hedges and groundcover"),
-         tr("Pools, fountains, ponds and streams")}));
+    modePages_->addWidget(new SitePanel(scene, *selection_));
     modePages_->addWidget(new LightPanel(scene, *selection_, *viewport_));
     auto* renderPanel = new RenderPanel(scene, *viewport_);
     connect(renderPanel, &RenderPanel::renderScreenRequested, this, &MainWindow::showRenderScreen);
