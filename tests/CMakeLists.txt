@@ -15,6 +15,7 @@ add_executable(lb_tests
     core/similar_tests.cpp
     core/solar_tests.cpp
     core/terrain_tests.cpp
+    core/terrain_edit_tests.cpp
     import/import_tests.cpp
     import/texture_set_tests.cpp
     project/project_file_tests.cpp

@@ -310,6 +310,29 @@ TEST_CASE("removing a mesh resource releases its GPU mesh") {
     CHECK(gpu.released == gpu.uploaded);
 }
 
+TEST_CASE("reshaping a mesh (sculpting) replaces its GPU mesh and nothing else") {
+    Scene scene;
+    FakeGpu gpu;
+    const ResourceId cube = scene.addMesh("cube", makeBox({0, 0, 0}, {1, 1, 1}));
+    const ResourceId other = scene.addMesh("other", makeBox({0, 0, 0}, {2, 2, 2}));
+    scene.setMeshInstance(scene.createEntity("a"), MeshInstance{cube, {}});
+    scene.setMeshInstance(scene.createEntity("b"), MeshInstance{other, {}});
+    render::SceneSync sync = makeSync(scene, gpu);
+    sync.update();
+    REQUIRE(gpu.uploaded.size() == 2);
+    const std::uint64_t before = sync.version();
+
+    scene.setMeshData(cube, makeBox({0, 0, 0}, {1, 1, 3})); // taller
+    CHECK(sync.version() != before);
+    sync.update();
+    CHECK(gpu.released.size() == 1);   // only the reshaped mesh was dropped…
+    CHECK(gpu.uploaded.size() == 3);   // …and uploaded again with its new shape
+    CHECK(sync.draws().size() == 2);
+    CHECK(scene.mesh(cube)->bounds.max.z == doctest::Approx(3.0f));
+    CHECK_THROWS_AS(scene.setMeshData(cube, MeshData{}), std::invalid_argument);
+    CHECK_THROWS_AS(scene.setMeshData(ResourceId{9999}, makeBox({0, 0, 0}, {1, 1, 1})), std::exception);
+}
+
 TEST_CASE("destroying the sync releases every uploaded mesh and texture") {
     Scene scene;
     FakeGpu gpu;

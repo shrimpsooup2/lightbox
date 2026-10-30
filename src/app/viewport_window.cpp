@@ -331,6 +331,13 @@ render::FrameInput ViewportWindow::frameInput(QSize size, bool overlays) const {
                                                           static_cast<float>(accent.blueF())));
             input.highlightWidth = 2.0f * static_cast<float>(devicePixelRatio());
         }
+        // The terrain brush's ring: white on top of everything, about 2 px.
+        for (std::size_t i = 0; i < brushRing_.size(); ++i) {
+            const glm::vec3& a = brushRing_[i];
+            const glm::vec3& b = brushRing_[(i + 1) % brushRing_.size()];
+            const float width = 2.0f * static_cast<float>(devicePixelRatio());
+            input.overlay.push_back(OverlayLine{a, width, b, width, glm::vec4(1.0f, 1.0f, 1.0f, 0.95f)});
+        }
     }
 
     const Environment& env = scene_.environment();
@@ -406,11 +413,42 @@ QImage ViewportWindow::grabFrame() {
     return image;
 }
 
+void ViewportWindow::emitBrush(QPointF position, BrushPhase phase, Qt::KeyboardModifiers modifiers) {
+    glm::vec3 origin;
+    glm::vec3 direction;
+    if (mouseRay(position, origin, direction)) {
+        emit terrainBrush(origin, direction, phase, (modifiers & Qt::ShiftModifier) != 0);
+    }
+}
+
+void ViewportWindow::setTerrainBrush(bool enabled) {
+    terrainBrushEnabled_ = enabled;
+    if (!enabled) {
+        brushStroke_ = false;
+        brushRing_.clear();
+        unsetCursor();
+    } else {
+        setCursor(Qt::CrossCursor);
+    }
+    requestUpdate();
+}
+
+void ViewportWindow::setBrushRing(std::vector<glm::vec3> points) {
+    brushRing_ = std::move(points);
+    requestUpdate();
+}
+
 void ViewportWindow::mousePressEvent(QMouseEvent* event) {
     lastMousePosition_ = event->position();
     pressPosition_ = event->position();
     dragged_ = false;
     setInteracting(true);
+    if (terrainBrushEnabled_ && !walkMode_ && event->button() == Qt::LeftButton) {
+        brushStroke_ = true;
+        dragged_ = true; // not a click: keep the selection
+        emitBrush(event->position(), BrushPhase::Begin, event->modifiers());
+        return;
+    }
     if (event->button() == Qt::LeftButton) {
         if (const std::optional<Gizmo> gizmo = currentGizmo()) {
             const GizmoHandle handle =
@@ -535,6 +573,14 @@ void ViewportWindow::mouseMoveEvent(QMouseEvent* event) {
     }
 
     const Qt::MouseButtons buttons = event->buttons();
+    if (brushStroke_) { // painting: the stroke owns the left button
+        emitBrush(event->position(), BrushPhase::Drag, event->modifiers());
+        return;
+    }
+    if (terrainBrushEnabled_ && !walkMode_ && buttons == Qt::NoButton) {
+        emitBrush(event->position(), BrushPhase::Hover, event->modifiers());
+        return;
+    }
     if (drag_.active()) {
         glm::vec3 origin;
         glm::vec3 direction;
@@ -599,6 +645,11 @@ void ViewportWindow::mouseMoveEvent(QMouseEvent* event) {
 void ViewportWindow::mouseReleaseEvent(QMouseEvent* event) {
     if (event->buttons() == Qt::NoButton) {
         setInteracting(!walkKeys_.isEmpty());
+    }
+    if (brushStroke_ && event->button() == Qt::LeftButton) {
+        brushStroke_ = false;
+        emitBrush(event->position(), BrushPhase::End, event->modifiers());
+        return;
     }
     if (drag_.active() && event->button() == Qt::LeftButton) {
         drag_.end();

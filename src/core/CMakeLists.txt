@@ -29,6 +29,8 @@ add_library(lb_core STATIC
     solar.hpp
     terrain.cpp
     terrain.hpp
+    terrain_edit.cpp
+    terrain_edit.hpp
     scene/environment.cpp
     scene/environment.hpp
     scene/ids.hpp

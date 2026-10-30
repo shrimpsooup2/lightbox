@@ -36,6 +36,26 @@ Newest entry first. Keep it short and factual:
 
 ## Session log
 
+### 2026-10-21 · Claude (omp) · Terrain sculpting brushes, Lumion style (5.2, D-033)
+
+- **Did:** `core/terrain_edit.*` (height grid from the ground mesh, five brushes, normal refresh, exact
+  ray/ground intersection), `Scene::setMeshData` + SceneSync re-upload, viewport brush mode (left button
+  paints, ring cursor, Shift inverts), Site ▸ Sculpt (brushes, size, strength, Undo stroke / Ctrl+Z),
+  sculpted ground protected from the Shape sliders.
+- **Verified:** warning-free build (`ninja -j 2`); 107 test cases pass (new: grid read-back and
+  refusal of non-grids, Raise/Lower falloff and clipping, Smooth/Flatten/Roughen, region and normal
+  writes, ray/ground intersection incl. a grazing ray at the lowest height (found and fixed: the
+  search box needs a small vertical pad), Scene::setMeshData, SceneSync re-upload). In the app
+  (sample house, GPU readback): two Raise strokes dragged across the front of the plinth lifted the
+  ground over it in a curved patch, the Shape section switched to "Shaped by hand" with greyed
+  sliders; two clicks on Undo stroke restored the flat ground and greyed the button.
+  Environment: this laptop's builds were very slow today (CMake configure alone took 42 min once;
+  the background shell stalled repeatedly) and the app's frame readback for screenshots is flaky:
+  retry until the PNG exists.
+- **Decisions:** D-033.
+- **Open / next:** grass/rock/sand painting layers, plateau/ramp brushes and building pads, paths and
+  roads, partial GPU updates, project-wide undo (0.7).
+
 ### 2026-10-21 · Claude (omp) · Stage 5 starts: generated ground (5.1, D-032)
 
 - **Did:** `core/terrain.*` (rolling hills, flat pad under the building, mesh with smooth normals and

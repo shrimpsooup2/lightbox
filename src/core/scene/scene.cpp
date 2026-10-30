@@ -150,6 +150,19 @@ ResourceId Scene::addMesh(std::string name, MeshData data) {
     return id;
 }
 
+void Scene::setMeshData(ResourceId id, MeshData data) {
+    const auto it = meshes_.find(id);
+    if (it == meshes_.end()) {
+        unknownId("mesh", id.value);
+    }
+    if (const char* problem = meshProblem(data)) {
+        throw std::invalid_argument(std::format("Scene::setMeshData: {}", problem));
+    }
+    it->second.bounds = computeBounds(data.positions);
+    it->second.data = std::move(data);
+    notify(SceneChange::Kind::ResourceChanged, {}, id);
+}
+
 void Scene::validateTextures(const Material& material) const {
     checkTextureReferences(material, [this](ResourceId id) { return textures_.contains(id); });
 }

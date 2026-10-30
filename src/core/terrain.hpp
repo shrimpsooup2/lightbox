@@ -44,6 +44,12 @@ MeshData makeTerrainMesh(const TerrainSettings& settings);
 
 // The ground object of a scene (root entity named "Terrain" with a mesh), or none.
 EntityId findTerrain(const Scene& scene);
+// Smooth value noise in [0, 1] (the ground's hills and the Roughen brush use it).
+float terrainNoise(glm::vec2 position, std::uint32_t seed);
+// Hand-sculpted ground: its mesh is renamed so that the generator's sliders leave it alone, also
+// after the project is reopened. markSculpted does nothing without a ground.
+bool isSculpted(const Scene& scene);
+void markSculpted(Scene& scene);
 // Makes the ground (replacing the previous one and its mesh) with `material` (none = default clay);
 // returns its entity. Not selected, not placed in any other way.
 EntityId setTerrain(Scene& scene, const TerrainSettings& settings, ResourceId material);

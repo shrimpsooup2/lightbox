@@ -27,6 +27,8 @@ class QVulkanInstance;
 
 namespace lb::app {
 
+enum class BrushPhase { Hover, Begin, Drag, End };
+
 // What a left/middle drag turns around.
 enum class OrbitMode {
     Model,  // the orbit target (center of the model after Frame)
@@ -72,6 +74,11 @@ public:
     void setGizmoEnabled(bool enabled);
     // Outline around the selected objects (every mode but Render, which keeps the view clean).
     void setSelectionOutline(bool enabled);
+    // Terrain brush (Site mode): while on, the left button paints (a stroke) instead of turning the
+    // view (middle turns, right pans); the viewport reports mouse rays through terrainBrush().
+    void setTerrainBrush(bool enabled);
+    // A closed outline of world points drawn over the scene (the brush's ring); empty hides it.
+    void setBrushRing(std::vector<glm::vec3> points);
     // Ray-traced view (on/off, quality, speed). Refines by itself after each change.
     void setRayTracing(const render::RayTracingSettings& settings);
     const render::RayTracingSettings& rayTracing() const { return rayTracing_; }
@@ -102,6 +109,8 @@ signals:
     // A short how-to for the status bar.
     void hint(const QString& text);
     void rayTracingChanged();
+    // A brush stroke: the mouse ray, which phase, and whether Shift (invert) is held.
+    void terrainBrush(glm::vec3 origin, glm::vec3 direction, lb::app::BrushPhase phase, bool invert);
     // After every frame while the ray-traced view is on (and once when it turns off).
     void rayTracingProgress(const lb::render::RayTracingStatus& status);
     // The scene's sky image could not be loaded (plain-language reason); the procedural sky stays.
@@ -138,6 +147,8 @@ private:
     // The light whose icon is under a window position, if any.
     EntityId lightUnder(QPointF position) const;
     void appendLightIcons(std::vector<OverlayLine>& out) const;
+    // Reports a brush event at a window position (when the mouse ray exists).
+    void emitBrush(QPointF position, BrushPhase phase, Qt::KeyboardModifiers modifiers);
     void standAt(QPointF position);
     void stepWalk();
     // Moves the walking eye, stopping at walls and sliding along them.
@@ -155,6 +166,9 @@ private:
     GizmoHandle hoverHandle_ = GizmoHandle::None;
     bool gizmoEnabled_ = false;
     bool outlineEnabled_ = true;
+    bool terrainBrushEnabled_ = false;
+    bool brushStroke_ = false; // the left button is down and painting
+    std::vector<glm::vec3> brushRing_;
     // Entity ids of the selected mesh objects (groups expanded), sorted: the outline's input.
     // Updated when the selection or the scene changes, not per frame.
     std::vector<std::uint64_t> highlighted_;

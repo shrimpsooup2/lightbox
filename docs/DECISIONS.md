@@ -509,3 +509,29 @@ entry with a new one that references it (`Supersedes D-00X`).
   for sculpting, replaces this when 5.2 needs it). The mesh is saved like any mesh (about 66 k
   vertices at most). Imports still land at z = 0, not on a hill. No LOD yet (≤ 256² cells).
 
+### D-033 · 2026-10-21 · Accepted · Sculpting edits the ground mesh in place (Lumion-style brushes)
+
+- **Context:** The owner asked for "Lumion style terrain tools". Lumion's are brushes you paint with
+  (raise, lower, smooth, flatten, noise) with a ring cursor, size and strength settings.
+- **Decision:**
+  - The generated ground (D-032) is a regular grid, so its mesh *is* the height field.
+    `core/terrain_edit.*`: `HeightGrid` read from the mesh (`heightGridFromMesh`, refuses anything that
+    isn't a square, evenly spaced grid), `applyBrush` (smoothstep falloff; Raise/Lower 6 m/s at
+    strength 1, Smooth toward the 3×3 average of the pre-stroke heights, Flatten toward a height,
+    Roughen with the ground's value noise per stroke seed), `writeHeights` (positions and the normals
+    of the region plus one ring), `HeightGrid::intersect` (ray march + bisection against the grid
+    itself: exact on the ground, ignores the building, cheap per mouse move).
+  - `Scene::setMeshData` replaces a mesh's geometry and notifies ResourceChanged; `SceneSync` releases
+    and re-uploads that GPU mesh and bumps the geometry version (ray scene rebuild). No new project
+    format: sculpting is saved as the mesh. A sculpted ground's mesh resource is renamed "Terrain
+    (sculpted)" (`markSculpted`), which is how the Shape sliders know to leave it alone, also after
+    reopening.
+  - The viewport reports mouse rays as brush events (Hover/Begin/Drag/End); while a brush is picked
+    the left button paints and only middle/right move the camera (Lumion's convention); the panel
+    owns the grid, applies the brush on a 30 Hz timer while the button is held, draws the ring (white
+    overlay line loop 10 cm above the surface) and keeps up to 24 whole-height snapshots for undo.
+- **Consequences:** Each application re-uploads the whole ground mesh (≈2 MB, with a GPU wait); that
+  is smooth enough at ≤ 256² cells but a partial vertex update is the next step if it stutters on
+  bigger ground. Undo exists only for strokes in the current session (no document undo until 0.7).
+  Sculpting needs the ground where it was made (not moved/rotated/scaled).
+

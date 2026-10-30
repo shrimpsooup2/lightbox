@@ -81,10 +81,10 @@ The order follows the work: bring the design in, dress it, light it, shoot it.
 
 | | |
 | --- | --- |
-| Left panel | **Ground**: *Add ground* makes a square of rolling hills around the building, flat under it; then **Shape** (size, hill height, hill size, *New shape*, *Flat under the building* and its blend distance) and *Remove*. Later: terrain tools, paths, pads, planting, water |
+| Left panel | **Ground**: *Add ground* makes a square of rolling hills around the building, flat under it, and *Remove*. **Sculpt**: pick a brush (Raise, Lower, Smooth, Flatten, Roughen), set its size and strength, and paint on the ground with the **left mouse button** (a white ring shows the brush; Shift reverses Raise/Lower; middle drag turns the view, right drag pans); *Undo stroke* / Ctrl+Z. **Shape** (size, hill height, hill size, *New shape*, *Flat under the building* and its blend): for generated ground only, disabled once you have sculpted it. Later: paint grass/rock/sand, paths, pads, planting, water |
 | Tools | Sculpt brushes, building pads, path/road tool, planting brush, water tools (5.2–5.6) |
 | Properties | Settings of the selected site object |
-| Status | **today:** ground generation (D-032). The ground is one object named "Terrain": select it and pick a grass material in Materials; Include similar objects never mixes it up with the building. Framing and imports ignore it |
+| Status | **today:** ground generation (D-032) and sculpt brushes (D-033). The ground is one object named "Terrain": select it and pick a grass material in Materials; Include similar objects never mixes it up with the building. Framing and imports ignore it |
 
 ### Light (Ctrl+5) — "set the mood"
 

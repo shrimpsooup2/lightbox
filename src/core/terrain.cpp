@@ -10,6 +10,7 @@ namespace lb {
 namespace {
 
 constexpr const char* kTerrainName = "Terrain";
+constexpr const char* kSculptedMeshName = "Terrain (sculpted)";
 constexpr float kMinExtent = 1.0f;
 
 float hash01(std::int32_t x, std::int32_t y, std::uint32_t seed) {
@@ -135,6 +136,25 @@ EntityId findTerrain(const Scene& scene) {
         }
     }
     return {};
+}
+
+float terrainNoise(glm::vec2 position, std::uint32_t seed) {
+    return valueNoise(position, seed);
+}
+
+bool isSculpted(const Scene& scene) {
+    const EntityId ground = findTerrain(scene);
+    if (!ground) {
+        return false;
+    }
+    const MeshResource* mesh = scene.mesh(scene.entity(ground)->meshInstance->mesh);
+    return mesh != nullptr && mesh->name == kSculptedMeshName;
+}
+
+void markSculpted(Scene& scene) {
+    if (const EntityId ground = findTerrain(scene); ground && !isSculpted(scene)) {
+        scene.setResourceName(scene.entity(ground)->meshInstance->mesh, kSculptedMeshName);
+    }
 }
 
 bool removeTerrain(Scene& scene) {

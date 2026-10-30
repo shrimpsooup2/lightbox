@@ -495,7 +495,7 @@ void MainWindow::createDocks(Scene& scene) {
     modePages_->addWidget(importPanel_);
     modePages_->addWidget(makeBuildPage(nullptr));
     modePages_->addWidget(new MaterialsPanel(scene, *selection_));
-    modePages_->addWidget(new SitePanel(scene, *selection_));
+    modePages_->addWidget(new SitePanel(scene, *selection_, *viewport_));
     modePages_->addWidget(new LightPanel(scene, *selection_, *viewport_));
     auto* renderPanel = new RenderPanel(scene, *viewport_);
     connect(renderPanel, &RenderPanel::renderScreenRequested, this, &MainWindow::showRenderScreen);

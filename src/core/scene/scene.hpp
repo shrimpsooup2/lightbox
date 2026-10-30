@@ -115,6 +115,9 @@ public:
     // Throws std::invalid_argument for meshes without vertices, indices or matching normals, or with
     // texture coordinates that don't match the vertex count.
     ResourceId addMesh(std::string name, MeshData data);
+    // Replaces a mesh's geometry in place (sculpting): same rules as addMesh; every user sees the
+    // new shape. Notifies ResourceChanged.
+    void setMeshData(ResourceId id, MeshData data);
     // Materials may only reference textures that exist in this scene (std::invalid_argument).
     ResourceId addMaterial(std::string name, const Material& material);
     void setMaterial(ResourceId id, const Material& material);

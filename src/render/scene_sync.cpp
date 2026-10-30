@@ -70,8 +70,14 @@ void SceneSync::onChange(const SceneChange& change) {
     case SceneChange::Kind::MeshInstanceChanged:
         ++geometryVersion_;
         break;
-    case SceneChange::Kind::ResourceChanged: // material edits; resource images and meshes are
-                                             // immutable, so nothing is re-uploaded
+    case SceneChange::Kind::ResourceChanged:
+        // Material edits just refresh the material table. A mesh that was reshaped (sculpting) is
+        // released here and uploaded again with its next draw; the ray scene rebuilds too.
+        if (meshes_.contains(change.resource)) {
+            removedMeshes_.push_back(change.resource);
+            ++geometryVersion_;
+        }
+        break;
     case SceneChange::Kind::LightChanged:
         break;
     }
